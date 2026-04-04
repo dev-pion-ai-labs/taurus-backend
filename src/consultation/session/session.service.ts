@@ -73,7 +73,7 @@ export class SessionService {
     return this.getSession(session.id, userId);
   }
 
-  private async compileSessionQuestions(
+  async compileSessionQuestions(
     sessionId: string,
     baseTemplate: { questions: { id: string; orderIndex: number }[] },
     industryTemplate?: { questions: { id: string; orderIndex: number }[] },

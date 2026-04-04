@@ -4,6 +4,8 @@ import { Job } from 'bullmq';
 import { PrismaService } from '../../prisma';
 import { AiService } from '../../ai';
 import { ChallengeService } from '../challenge/challenge.service';
+import { SessionService } from '../session/session.service';
+import { TemplateService } from './template.service';
 
 interface TemplateGenerationJob {
   templateId: string;
@@ -18,6 +20,8 @@ export class TemplateGeneratorProcessor extends WorkerHost {
     private prisma: PrismaService,
     private aiService: AiService,
     private challengeService: ChallengeService,
+    private sessionService: SessionService,
+    private templateService: TemplateService,
   ) {
     super();
   }
@@ -93,22 +97,31 @@ export class TemplateGeneratorProcessor extends WorkerHost {
           status: 'PENDING_TEMPLATE',
           organization: { industryId },
         },
-        include: { organization: true },
+        include: { baseTemplate: { include: { questions: { orderBy: { orderIndex: 'asc' } } } } },
       });
 
       if (pendingSessions.length) {
         this.logger.log(
           `Unblocking ${pendingSessions.length} pending sessions`,
         );
-        await this.prisma.consultationSession.updateMany({
-          where: {
-            id: { in: pendingSessions.map((s) => s.id) },
-          },
-          data: {
-            industryTemplateId: templateId,
-            status: 'IN_PROGRESS',
-          },
-        });
+
+        const newIndustryTemplate = await this.templateService.getIndustryTemplate(industryId);
+
+        for (const session of pendingSessions) {
+          await this.prisma.consultationSession.update({
+            where: { id: session.id },
+            data: {
+              industryTemplateId: templateId,
+              status: 'IN_PROGRESS',
+            },
+          });
+
+          await this.sessionService.compileSessionQuestions(
+            session.id,
+            session.baseTemplate,
+            newIndustryTemplate ?? undefined,
+          );
+        }
       }
 
       this.logger.log(

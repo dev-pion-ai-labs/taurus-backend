@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AiModule } from '../ai';
+import { QueueModule } from '../queue';
 import { IndustryService } from './industry/industry.service';
 import { IndustryController } from './industry/industry.controller';
 import { ChallengeService } from './challenge/challenge.service';
@@ -11,7 +12,7 @@ import { SessionService } from './session/session.service';
 import { SessionController } from './session/session.controller';
 
 @Module({
-  imports: [AiModule],
+  imports: [AiModule, QueueModule],
   controllers: [IndustryController, TemplateController, SessionController],
   providers: [
     IndustryService,
