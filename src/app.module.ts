@@ -1,0 +1,45 @@
+import { Module } from '@nestjs/common';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
+import { AppConfigModule } from './config';
+import { PrismaModule } from './prisma';
+import { RedisModule } from './redis';
+import { QueueModule } from './queue';
+import { UsersModule } from './users';
+import { AuthModule } from './auth';
+import { OrganizationsModule } from './organizations';
+import { ConsultationModule } from './consultation';
+import { HealthModule } from './health/health.module';
+
+@Module({
+  imports: [
+    AppConfigModule,
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [
+          {
+            ttl: config.get<number>('throttle.ttl')! * 1000,
+            limit: config.get<number>('throttle.limit')!,
+          },
+        ],
+      }),
+    }),
+    PrismaModule,
+    RedisModule,
+    QueueModule,
+    UsersModule,
+    AuthModule,
+    OrganizationsModule,
+    ConsultationModule,
+    HealthModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
+})
+export class AppModule {}

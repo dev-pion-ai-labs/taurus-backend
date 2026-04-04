@@ -1,0 +1,232 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum TemplateType {
+  BASE
+  INDUSTRY
+}
+
+enum TemplateStatus {
+  GENERATING
+  ACTIVE
+  DEPRECATED
+}
+
+enum QuestionType {
+  TEXT
+  SINGLE_CHOICE
+  MULTI_CHOICE
+  SCALE
+}
+
+enum SessionStatus {
+  PENDING_TEMPLATE
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+enum QuestionSection {
+  BASE
+  INDUSTRY
+  CHALLENGE_BONUS
+}
+
+// ─── Models ──────────────────────────────────────────────
+
+model Industry {
+  id            String   @id @default(uuid())
+  name          String
+  normalizedKey String   @unique @map("normalized_key")
+  aliases       String[] @default([])
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  organizations Organization[]
+  templates     ConsultationTemplate[]
+
+  @@map("industries")
+}
+
+model Organization {
+  id         String   @id @default(uuid())
+  name       String
+  industryId String   @map("industry_id")
+  size       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  industry Industry              @relation(fields: [industryId], references: [id])
+  users    User[]
+  sessions ConsultationSession[]
+
+  @@index([industryId])
+  @@map("organizations")
+}
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  firstName      String?  @map("first_name")
+  lastName       String?  @map("last_name")
+  role           Role     @default(MEMBER)
+  organizationId String?  @map("organization_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization  Organization?        @relation(fields: [organizationId], references: [id])
+  refreshTokens RefreshToken[]
+  sessions      ConsultationSession[]
+  otpCodes      OtpCode[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+model OtpCode {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  code      String
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("otp_codes")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique @map("token_hash")
+  userId    String    @map("user_id")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model ConsultationTemplate {
+  id           String         @id @default(uuid())
+  type         TemplateType
+  status       TemplateStatus @default(GENERATING)
+  version      Int            @default(1)
+  industryId   String?        @map("industry_id")
+  aiModel      String?        @map("ai_model")
+  aiPromptHash String?        @map("ai_prompt_hash")
+  generatedAt  DateTime?      @map("generated_at")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+
+  industry  Industry?          @relation(fields: [industryId], references: [id])
+  questions TemplateQuestion[]
+
+  baseSessions     ConsultationSession[] @relation("BaseTemplate")
+  industrySessions ConsultationSession[] @relation("IndustryTemplate")
+
+  @@unique([type, industryId, version])
+  @@map("consultation_templates")
+}
+
+model TemplateQuestion {
+  id           String       @id @default(uuid())
+  templateId   String       @map("template_id")
+  questionText String       @map("question_text")
+  questionType QuestionType @map("question_type")
+  options      Json?
+  orderIndex   Int          @map("order_index")
+  isRequired   Boolean      @default(true) @map("is_required")
+  metadata     Json?
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  template       ConsultationTemplate   @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  challengeAreas QuestionChallengeArea[]
+  sessionQuestions SessionQuestion[]
+
+  @@index([templateId, orderIndex])
+  @@map("template_questions")
+}
+
+model ChallengeArea {
+  id            String   @id @default(uuid())
+  name          String
+  normalizedKey String   @unique @map("normalized_key")
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  questions QuestionChallengeArea[]
+
+  @@map("challenge_areas")
+}
+
+model QuestionChallengeArea {
+  questionId      String @map("question_id")
+  challengeAreaId String @map("challenge_area_id")
+
+  question      TemplateQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  challengeArea ChallengeArea    @relation(fields: [challengeAreaId], references: [id], onDelete: Cascade)
+
+  @@id([questionId, challengeAreaId])
+  @@map("question_challenge_areas")
+}
+
+model ConsultationSession {
+  id                 String        @id @default(uuid())
+  organizationId     String        @map("organization_id")
+  userId             String        @map("user_id")
+  status             SessionStatus @default(PENDING_TEMPLATE)
+  baseTemplateId     String        @map("base_template_id")
+  industryTemplateId String?       @map("industry_template_id")
+  startedAt          DateTime      @default(now()) @map("started_at")
+  completedAt        DateTime?     @map("completed_at")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  organization     Organization         @relation(fields: [organizationId], references: [id])
+  user             User                 @relation(fields: [userId], references: [id])
+  baseTemplate     ConsultationTemplate @relation("BaseTemplate", fields: [baseTemplateId], references: [id])
+  industryTemplate ConsultationTemplate? @relation("IndustryTemplate", fields: [industryTemplateId], references: [id])
+  questions        SessionQuestion[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("consultation_sessions")
+}
+
+model SessionQuestion {
+  id         String          @id @default(uuid())
+  sessionId  String          @map("session_id")
+  questionId String          @map("question_id")
+  section    QuestionSection
+  orderIndex Int             @map("order_index")
+  answer     Json?
+  answeredAt DateTime?       @map("answered_at")
+  skipped    Boolean         @default(false)
+  createdAt  DateTime        @default(now()) @map("created_at")
+  updatedAt  DateTime        @updatedAt @map("updated_at")
+
+  session  ConsultationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question TemplateQuestion    @relation(fields: [questionId], references: [id])
+
+  @@unique([sessionId, questionId])
+  @@index([sessionId, orderIndex])
+  @@map("session_questions")
+}
