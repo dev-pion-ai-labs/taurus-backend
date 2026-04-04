@@ -10,8 +10,8 @@ export const envValidationSchema = Joi.object({
   DATABASE_URL: Joi.string().required(),
 
   REDIS_URL: Joi.string().optional().allow(''),
-  REDIS_HOST: Joi.string().default('localhost'),
-  REDIS_PORT: Joi.number().default(6379),
+  REDIS_HOST: Joi.string().allow('').default('localhost'),
+  REDIS_PORT: Joi.number().allow('').default(6379),
   REDIS_PASSWORD: Joi.string().optional().allow(''),
 
   JWT_ACCESS_SECRET: Joi.string().required(),
