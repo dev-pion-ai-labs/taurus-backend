@@ -138,6 +138,14 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         data: { status: 'DEPRECATED' },
       });
 
+      await this.prisma.consultationSession.updateMany({
+        where: {
+          status: 'PENDING_TEMPLATE',
+          organization: { industryId },
+        },
+        data: { status: 'FAILED' },
+      });
+
       throw error;
     }
   }

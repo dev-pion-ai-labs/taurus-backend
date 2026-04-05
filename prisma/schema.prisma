@@ -36,6 +36,7 @@ enum SessionStatus {
   IN_PROGRESS
   COMPLETED
   ABANDONED
+  FAILED
 }
 
 enum QuestionSection {
