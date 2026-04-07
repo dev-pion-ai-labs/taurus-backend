@@ -342,6 +342,7 @@ model Onboarding {
 
   // Step 1: Basic Info
   companyName    String? @map("company_name")
+  companyUrl     String? @map("company_url")
   industryId     String? @map("industry_id")
   customIndustry String? @map("custom_industry")
   companySize    String? @map("company_size")
