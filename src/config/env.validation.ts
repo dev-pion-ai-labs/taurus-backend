@@ -27,4 +27,6 @@ export const envValidationSchema = Joi.object({
 
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(60),
+
+  UPLOAD_DIR: Joi.string().default('./uploads'),
 });

@@ -39,6 +39,12 @@ enum SessionStatus {
   FAILED
 }
 
+enum ReportStatus {
+  GENERATING
+  COMPLETED
+  FAILED
+}
+
 enum QuestionSection {
   BASE
   INDUSTRY
@@ -68,23 +74,27 @@ model Organization {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  industry Industry              @relation(fields: [industryId], references: [id])
-  users    User[]
-  sessions ConsultationSession[]
+  industry    Industry              @relation(fields: [industryId], references: [id])
+  users       User[]
+  sessions    ConsultationSession[]
+  onboarding  Onboarding?
+  departments Department[]
+  reports     TransformationReport[]
 
   @@index([industryId])
   @@map("organizations")
 }
 
 model User {
-  id             String   @id @default(uuid())
-  email          String   @unique
-  firstName      String?  @map("first_name")
-  lastName       String?  @map("last_name")
-  role           Role     @default(MEMBER)
-  organizationId String?  @map("organization_id")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id                  String   @id @default(uuid())
+  email               String   @unique
+  firstName           String?  @map("first_name")
+  lastName            String?  @map("last_name")
+  role                Role     @default(MEMBER)
+  organizationId      String?  @map("organization_id")
+  onboardingCompleted Boolean  @default(false) @map("onboarding_completed")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   organization  Organization?        @relation(fields: [organizationId], references: [id])
   refreshTokens RefreshToken[]
@@ -206,6 +216,7 @@ model ConsultationSession {
   baseTemplate     ConsultationTemplate @relation("BaseTemplate", fields: [baseTemplateId], references: [id])
   industryTemplate ConsultationTemplate? @relation("IndustryTemplate", fields: [industryTemplateId], references: [id])
   questions        SessionQuestion[]
+  report           TransformationReport?
 
   @@index([organizationId])
   @@index([status])
@@ -230,4 +241,152 @@ model SessionQuestion {
   @@unique([sessionId, questionId])
   @@index([sessionId, orderIndex])
   @@map("session_questions")
+}
+
+// ─── Transformation Report ──────────────────────────────
+
+model TransformationReport {
+  id                   String       @id @default(uuid())
+  sessionId            String       @unique @map("session_id")
+  organizationId       String       @map("organization_id")
+  status               ReportStatus @default(GENERATING)
+
+  // Scores
+  overallScore         Int?         @map("overall_score")
+  maturityLevel        String?      @map("maturity_level")
+
+  // Financial
+  totalEfficiencyValue Float?       @map("total_efficiency_value")
+  totalGrowthValue     Float?       @map("total_growth_value")
+  totalAiValue         Float?       @map("total_ai_value")
+  fteRedeployable      Float?       @map("fte_redeployable")
+
+  // Structured content (JSON)
+  executiveSummary     Json?        @map("executive_summary")
+  departmentScores     Json?        @map("department_scores")
+  recommendations      Json?
+  implementationPlan   Json?        @map("implementation_plan")
+
+  generatedAt          DateTime?    @map("generated_at")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+
+  session      ConsultationSession @relation(fields: [sessionId], references: [id])
+  organization Organization        @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+  @@map("transformation_reports")
+}
+
+// ─── Department & Workflow Mapping ───────────────────────
+
+enum AutomationLevel {
+  NONE
+  LOW
+  MODERATE
+  HIGH
+  FULL
+}
+
+enum WorkflowPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Department {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  name           String
+  headcount      Int?
+  avgSalary      Float?   @map("avg_salary")
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflows    Workflow[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("departments")
+}
+
+model Workflow {
+  id              String          @id @default(uuid())
+  departmentId    String          @map("department_id")
+  name            String
+  description     String?         @db.Text
+  weeklyHours     Float?          @map("weekly_hours")
+  peopleInvolved  Int?            @map("people_involved")
+  automationLevel AutomationLevel @default(NONE) @map("automation_level")
+  painPoints      String?         @map("pain_points") @db.Text
+  priority        WorkflowPriority @default(MEDIUM)
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@index([departmentId])
+  @@map("workflows")
+}
+
+// ─── Onboarding ─────────────────────────────────────────
+
+model Onboarding {
+  id             String  @id @default(uuid())
+  organizationId String  @unique @map("organization_id")
+  currentStep    Int     @default(1) @map("current_step")
+  completed      Boolean @default(false)
+
+  // Step 1: Basic Info
+  companyName    String? @map("company_name")
+  industryId     String? @map("industry_id")
+  customIndustry String? @map("custom_industry")
+  companySize    String? @map("company_size")
+
+  // Step 2: Business Context
+  businessDescription String? @map("business_description") @db.Text
+  revenueStreams      String? @map("revenue_streams") @db.Text
+
+  // Step 3: Challenges
+  selectedChallenges String[] @default([]) @map("selected_challenges")
+  customChallenges   String?  @map("custom_challenges") @db.Text
+
+  // Step 4: Data Availability
+  availableData     String[] @default([]) @map("available_data")
+  customDataSources String?  @map("custom_data_sources") @db.Text
+
+  // Step 6: Tools/Tech Stack
+  selectedTools String[] @default([]) @map("selected_tools")
+  customTools   String?  @map("custom_tools")
+
+  // Step 7: Goals
+  selectedGoals String[] @default([]) @map("selected_goals")
+  customGoals   String?  @map("custom_goals") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organization Organization         @relation(fields: [organizationId], references: [id])
+  documents    OnboardingDocument[]
+
+  @@map("onboardings")
+}
+
+model OnboardingDocument {
+  id           String   @id @default(uuid())
+  onboardingId String   @map("onboarding_id")
+  name         String
+  type         String
+  size         Int
+  storagePath  String   @map("storage_path")
+  url          String?
+  uploadedAt   DateTime @default(now()) @map("uploaded_at")
+
+  onboarding Onboarding @relation(fields: [onboardingId], references: [id], onDelete: Cascade)
+
+  @@index([onboardingId])
+  @@map("onboarding_documents")
 }

@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SessionService } from './session.service';
+import { ReportService } from './report.service';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import {
   JwtAuthGuard,
@@ -22,7 +23,10 @@ import {
 @UseGuards(JwtAuthGuard)
 @Controller('consultation/sessions')
 export class SessionController {
-  constructor(private sessionService: SessionService) {}
+  constructor(
+    private sessionService: SessionService,
+    private reportService: ReportService,
+  ) {}
 
   @Post()
   start(@CurrentUser() user: { id: string; organizationId: string }) {
@@ -42,7 +46,7 @@ export class SessionController {
     @Param('id') id: string,
     @CurrentUser('id') userId: string,
   ) {
-    return this.sessionService.getSession(id, userId);
+    return this.sessionService.getSessionWithReport(id, userId);
   }
 
   @Get(':id/current-question')
@@ -68,5 +72,27 @@ export class SessionController {
     @CurrentUser('id') userId: string,
   ) {
     return this.sessionService.abandonSession(id, userId);
+  }
+
+  // ── Report Endpoints ──────────────────────────────────────
+
+  @Get(':id/report')
+  getReport(
+    @Param('id') sessionId: string,
+    @CurrentUser('organizationId') orgId: string,
+  ) {
+    return this.reportService.getReport(sessionId, orgId);
+  }
+
+  @Post(':id/report/regenerate')
+  regenerateReport(
+    @Param('id') sessionId: string,
+    @CurrentUser() user: { id: string; organizationId: string },
+  ) {
+    return this.reportService.regenerateReport(
+      sessionId,
+      user.id,
+      user.organizationId,
+    );
   }
 }

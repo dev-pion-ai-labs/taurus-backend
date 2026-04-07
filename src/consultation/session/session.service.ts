@@ -120,6 +120,28 @@ export class SessionService {
     return session;
   }
 
+  async getSessionWithReport(sessionId: string, userId: string) {
+    const session = await this.prisma.consultationSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        questions: {
+          orderBy: { orderIndex: 'asc' },
+          include: { question: true },
+        },
+        organization: { include: { industry: true } },
+        report: {
+          select: { id: true, status: true },
+        },
+      },
+    });
+
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.userId !== userId)
+      throw new ForbiddenException('Not your session');
+
+    return session;
+  }
+
   async getCurrentQuestion(sessionId: string, userId: string) {
     const session = await this.prisma.consultationSession.findUnique({
       where: { id: sessionId },
@@ -194,13 +216,28 @@ export class SessionService {
     });
 
     if (remaining === 0) {
-      await this.prisma.consultationSession.update({
+      const completedSession = await this.prisma.consultationSession.update({
         where: { id: sessionId },
         data: { status: 'COMPLETED', completedAt: new Date() },
       });
 
-      await this.analysisQueue.add('analyze', { sessionId });
-      this.logger.log(`Session ${sessionId} completed, analysis queued`);
+      // Auto-generate transformation report
+      const report = await this.prisma.transformationReport.create({
+        data: {
+          sessionId: completedSession.id,
+          organizationId: completedSession.organizationId,
+          status: 'GENERATING',
+        },
+      });
+
+      await this.analysisQueue.add('generate-report', {
+        reportId: report.id,
+        sessionId: completedSession.id,
+        organizationId: completedSession.organizationId,
+      });
+      this.logger.log(
+        `Session ${sessionId} completed, report ${report.id} generation queued`,
+      );
 
       return { status: 'COMPLETED', nextQuestion: null };
     }
@@ -256,6 +293,7 @@ export class SessionService {
         orderBy: { createdAt: 'desc' },
         include: {
           user: { select: { id: true, email: true, firstName: true, lastName: true } },
+          report: { select: { id: true, status: true } },
           _count: { select: { questions: true } },
         },
       }),

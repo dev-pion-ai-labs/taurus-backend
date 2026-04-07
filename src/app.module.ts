@@ -10,6 +10,10 @@ import { UsersModule } from './users';
 import { AuthModule } from './auth';
 import { OrganizationsModule } from './organizations';
 import { ConsultationModule } from './consultation';
+import { OnboardingModule } from './onboarding';
+import { DepartmentsModule } from './departments';
+import { DashboardModule } from './dashboard';
+import { StorageModule } from './storage';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -33,6 +37,10 @@ import { HealthModule } from './health/health.module';
     AuthModule,
     OrganizationsModule,
     ConsultationModule,
+    StorageModule,
+    OnboardingModule,
+    DepartmentsModule,
+    DashboardModule,
     HealthModule,
   ],
   providers: [

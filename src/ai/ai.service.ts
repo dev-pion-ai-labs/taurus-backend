@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildQuestionGenerationPrompt } from './prompts/question-generation.prompt';
+import {
+  buildReportGenerationPrompt,
+  type ReportGenerationContext,
+} from './prompts/report-generation.prompt';
 
 export interface GeneratedQuestion {
   questionText: string;
@@ -62,7 +66,185 @@ export class AiService {
     throw new Error('Failed to generate questions after retries');
   }
 
+  async generateOnboardingInsights(profile: {
+    companyName: string;
+    industry: string;
+    companySize: string | null;
+    businessDescription: string;
+    revenueStreams: string;
+    challenges: string[];
+    dataAvailability: string[];
+    tools: string[];
+    goals: string[];
+  }): Promise<OnboardingInsights> {
+    const system = `You are a senior AI transformation strategist. Analyze the company profile and return a JSON object with actionable insights. Be specific to the company's industry, size, and stated challenges. Keep each insight concise (1-2 sentences). Return ONLY valid JSON, no markdown.`;
+
+    const user = `Analyze this company profile and provide strategic AI transformation insights:
+
+Company: ${profile.companyName}
+Industry: ${profile.industry}
+Size: ${profile.companySize || 'Not specified'}
+Business: ${profile.businessDescription}
+Revenue Streams: ${profile.revenueStreams}
+Key Challenges: ${profile.challenges.join(', ')}
+Available Data: ${profile.dataAvailability.join(', ')}
+Current Tools: ${profile.tools.join(', ')}
+AI Goals: ${profile.goals.join(', ')}
+
+Return a JSON object with this exact structure:
+{
+  "summary": "A 2-3 sentence executive summary of the company's AI readiness and biggest opportunity",
+  "readinessScore": <number 1-100 based on data availability, tool maturity, and clarity of goals>,
+  "topOpportunities": [
+    { "title": "short title", "description": "1-2 sentence description of the opportunity", "impact": "HIGH" | "MEDIUM" | "LOW", "timeframe": "SHORT" | "MEDIUM" | "LONG" }
+  ],
+  "quickWins": ["3-5 specific quick wins they can achieve in 30 days based on their tools and data"],
+  "risks": ["2-3 key risks or gaps to address before scaling AI initiatives"],
+  "recommendedNextSteps": ["3-4 ordered next steps for their AI transformation journey"]
+}`;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 2048,
+          system,
+          messages: [{ role: 'user', content: user }],
+        });
+
+        const text =
+          response.content[0].type === 'text' ? response.content[0].text : '';
+        const insights: OnboardingInsights = JSON.parse(text);
+        return insights;
+      } catch (error) {
+        this.logger.warn(
+          `AI insights generation attempt ${attempt + 1} failed: ${error.message}`,
+        );
+        if (attempt === 1) throw error;
+      }
+    }
+
+    throw new Error('Failed to generate insights after retries');
+  }
+
+  async generateTransformationReport(
+    context: ReportGenerationContext,
+  ): Promise<TransformationReportData> {
+    const { system, user } = buildReportGenerationPrompt(context);
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 8192,
+          system,
+          messages: [{ role: 'user', content: user }],
+        });
+
+        const text =
+          response.content[0].type === 'text' ? response.content[0].text : '';
+
+        // Strip potential markdown code fences
+        const cleaned = text
+          .replace(/^```json?\s*/i, '')
+          .replace(/```\s*$/i, '')
+          .trim();
+
+        const report: TransformationReportData = JSON.parse(cleaned);
+
+        // Basic validation
+        if (
+          typeof report.overallScore !== 'number' ||
+          !report.maturityLevel ||
+          !Array.isArray(report.departmentScores) ||
+          !Array.isArray(report.recommendations) ||
+          !Array.isArray(report.implementationPlan)
+        ) {
+          throw new Error('Report JSON missing required fields');
+        }
+
+        return report;
+      } catch (error) {
+        this.logger.warn(
+          `AI report generation attempt ${attempt + 1} failed: ${error.message}`,
+        );
+        if (attempt === 1) throw error;
+      }
+    }
+
+    throw new Error('Failed to generate report after retries');
+  }
+
   getModel(): string {
     return this.model;
   }
+}
+
+export interface TransformationReportData {
+  overallScore: number;
+  maturityLevel: string;
+  fteRedeployable: number;
+  executiveSummary: {
+    summary: string;
+    keyFindings: string[];
+  };
+  departmentScores: {
+    department: string;
+    score: number;
+    maturityLevel: string;
+    currentState: string;
+    potentialState: string;
+    efficiencyValue: number;
+    growthValue: number;
+    workflows: {
+      name: string;
+      currentProcess: string;
+      aiOpportunity: string;
+      automationPotential: number;
+      weeklyHoursSaved: number;
+      annualValueSaved: number;
+      effort: string;
+      timeframe: string;
+    }[];
+  }[];
+  recommendations: {
+    id: string;
+    title: string;
+    description: string;
+    department: string;
+    impact: string;
+    effort: string;
+    annualValue: number;
+    timeToImplement: string;
+    prerequisites: string[];
+    category: string;
+  }[];
+  implementationPlan: {
+    phase: number;
+    name: string;
+    timeframe: string;
+    focus: string;
+    totalValue: number;
+    actions: {
+      title: string;
+      department: string;
+      value: number;
+      effort: string;
+      status: string;
+    }[];
+  }[];
+}
+
+export interface OnboardingInsights {
+  summary: string;
+  readinessScore: number;
+  topOpportunities: {
+    title: string;
+    description: string;
+    impact: 'HIGH' | 'MEDIUM' | 'LOW';
+    timeframe: 'SHORT' | 'MEDIUM' | 'LONG';
+  }[];
+  quickWins: string[];
+  risks: string[];
+  recommendedNextSteps: string[];
 }
