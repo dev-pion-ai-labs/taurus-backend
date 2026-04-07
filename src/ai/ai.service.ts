@@ -37,7 +37,7 @@ export class AiService {
       challengeAreas,
     );
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const response = await this.client.messages.create({
           model: this.model,
@@ -46,8 +46,9 @@ export class AiService {
           messages: [{ role: 'user', content: user }],
         });
 
-        const text =
+        const raw =
           response.content[0].type === 'text' ? response.content[0].text : '';
+        const text = raw.replace(/```json?\s*\n?/gi, '').replace(/```\s*/gi, '').trim();
         const questions: GeneratedQuestion[] = JSON.parse(text);
 
         if (!Array.isArray(questions) || questions.length < 5) {
@@ -59,7 +60,7 @@ export class AiService {
         this.logger.warn(
           `AI question generation attempt ${attempt + 1} failed: ${error.message}`,
         );
-        if (attempt === 1) throw error;
+        if (attempt === 2) throw error;
       }
     }
 
@@ -103,7 +104,7 @@ Return a JSON object with this exact structure:
   "recommendedNextSteps": ["3-4 ordered next steps for their AI transformation journey"]
 }`;
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const response = await this.client.messages.create({
           model: this.model,
@@ -112,15 +113,16 @@ Return a JSON object with this exact structure:
           messages: [{ role: 'user', content: user }],
         });
 
-        const text =
+        const raw =
           response.content[0].type === 'text' ? response.content[0].text : '';
+        const text = raw.replace(/```json?\s*\n?/gi, '').replace(/```\s*$/gi, '').trim();
         const insights: OnboardingInsights = JSON.parse(text);
         return insights;
       } catch (error) {
         this.logger.warn(
           `AI insights generation attempt ${attempt + 1} failed: ${error.message}`,
         );
-        if (attempt === 1) throw error;
+        if (attempt === 2) throw error;
       }
     }
 
@@ -132,7 +134,7 @@ Return a JSON object with this exact structure:
   ): Promise<TransformationReportData> {
     const { system, user } = buildReportGenerationPrompt(context);
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const response = await this.client.messages.create({
           model: this.model,
@@ -146,8 +148,8 @@ Return a JSON object with this exact structure:
 
         // Strip potential markdown code fences
         const cleaned = text
-          .replace(/^```json?\s*/i, '')
-          .replace(/```\s*$/i, '')
+          .replace(/```json?\s*\n?/gi, '')
+          .replace(/```\s*/gi, '')
           .trim();
 
         const report: TransformationReportData = JSON.parse(cleaned);
@@ -168,7 +170,7 @@ Return a JSON object with this exact structure:
         this.logger.warn(
           `AI report generation attempt ${attempt + 1} failed: ${error.message}`,
         );
-        if (attempt === 1) throw error;
+        if (attempt === 2) throw error;
       }
     }
 
