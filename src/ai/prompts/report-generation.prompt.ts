@@ -42,7 +42,13 @@ export function buildReportGenerationPrompt(ctx: ReportGenerationContext): {
   system: string;
   user: string;
 } {
-  const system = `You are an expert AI transformation consultant producing a comprehensive, board-ready AI Transformation Roadmap. You analyze companies with surgical precision and generate quantified, dollar-valued recommendations.
+  // Scale output requirements to actual company data
+  const deptCount = ctx.departments.length;
+  const minDepts = deptCount >= 3 ? deptCount : Math.max(3, deptCount + 1);
+  const minRecs = Math.max(5, minDepts * 2);
+  const minPhases = 3;
+
+  const system = `You are an expert AI transformation consultant producing a board-ready AI Transformation Roadmap. You analyze companies with surgical precision and generate quantified, dollar-valued recommendations.
 
 Return ONLY valid JSON matching the exact schema specified. No markdown, no commentary, no wrapping. Start with { and end with }.
 
@@ -51,9 +57,10 @@ CRITICAL RULES for dollar values:
 - Use the average salary data if provided to calculate FTE savings accurately.
 - If no salary data, use industry benchmarks: Tech $95K, Finance $105K, Healthcare $85K, Retail $55K, default $75K.
 - Weekly hours saved × 52 weeks × (hourly rate) = annual value. Hourly rate = avg salary / 2080.
-- Generate at minimum 5 departments, 10 recommendations, 4 phases with 3-6 actions each.
+- Generate ${minDepts} departments (use provided departments, add 1-2 inferred ones only if fewer than 3 were provided), ${minRecs} recommendations, and ${minPhases} implementation phases with 2-4 actions each.
 - Every recommendation must have a unique UUID as its "id" field.
-- All scores are integers 0-100. All dollar values are numbers (not strings).`;
+- All scores are integers 0-100. All dollar values are numbers (not strings).
+- Be concise in descriptions — 1 sentence max for currentState, potentialState, currentProcess, aiOpportunity. Keep the total output compact.`;
 
   // Build departments section
   let departmentsText = 'No departments mapped yet — infer standard departments from the industry and company size.';
@@ -176,7 +183,7 @@ Return a JSON object with this EXACT structure:
   ]
 }
 
-Remember: Generate at least 5 departments (infer from industry if not provided), 10+ recommendations, and 4 phases with 3-6 actions each. All dollar values must be realistic for a ${ctx.organization.size || 'mid-size'}-employee ${ctx.organization.industry} company. Every recommendation needs a unique UUID.`;
+Remember: Generate ${minDepts} departments${deptCount > 0 ? ' (use the provided ones, only infer if fewer than 3)' : ' (infer from industry)'}, ${minRecs} recommendations, and ${minPhases} phases with 2-4 actions each. All dollar values must be realistic for a ${ctx.organization.size || 'mid-size'}-employee ${ctx.organization.industry} company. Every recommendation needs a unique UUID. Keep descriptions concise — 1 sentence each.`;
 
   return { system, user };
 }

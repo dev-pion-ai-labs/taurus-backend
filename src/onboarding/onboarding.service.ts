@@ -146,7 +146,12 @@ export class OnboardingService {
       );
     }
 
-    return this.ai.generateOnboardingInsights({
+    // Return cached insights if available
+    if (onboarding.aiInsights && onboarding.insightsAt) {
+      return onboarding.aiInsights;
+    }
+
+    const insights = await this.ai.generateOnboardingInsights({
       companyName: onboarding.companyName || '',
       industry: onboarding.organization.industry?.name || 'Unknown',
       companySize: onboarding.companySize,
@@ -157,6 +162,14 @@ export class OnboardingService {
       tools: onboarding.selectedTools,
       goals: onboarding.selectedGoals,
     });
+
+    // Cache the result
+    await this.prisma.onboarding.update({
+      where: { organizationId },
+      data: { aiInsights: insights as any, insightsAt: new Date() },
+    });
+
+    return insights;
   }
 
   async saveProgress(organizationId: string, dto: SaveProgressDto) {
@@ -209,14 +222,18 @@ export class OnboardingService {
 
     // Use a transaction to ensure atomicity
     await this.prisma.$transaction(async (tx) => {
-      // Upsert onboarding record
+      // Upsert onboarding record and invalidate cached insights
       await tx.onboarding.upsert({
         where: { organizationId },
         create: {
           organizationId,
           ...onboardingData,
         },
-        update: onboardingData,
+        update: {
+          ...onboardingData,
+          aiInsights: null,
+          insightsAt: null,
+        },
       });
 
       // Mark user onboarding as completed
