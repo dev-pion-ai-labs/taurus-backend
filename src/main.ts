@@ -19,6 +19,12 @@ async function bootstrap() {
     credentials: true,
   });
 
+  // Root route — visible when opening the public URL in a browser
+  const httpAdapter = app.getHttpAdapter();
+  httpAdapter.get('/', (_req, res) => {
+    res.json({ status: 'ok', service: 'taurus-backend', timestamp: new Date().toISOString() });
+  });
+
   // Global prefix
   app.setGlobalPrefix('api/v1');
 
@@ -50,5 +56,9 @@ async function bootstrap() {
 
   const port = configService.get<number>('app.port') ?? 3000;
   await app.listen(port, '0.0.0.0');
+  console.log(`Application listening on port ${port}`);
 }
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('Failed to start application:', err);
+  process.exit(1);
+});

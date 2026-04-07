@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 // Fields that map directly from DTO to Prisma model
 const ONBOARDING_DATA_FIELDS = [
   'companyName',
+  'companyUrl',
   'industryId',
   'customIndustry',
   'companySize',
@@ -99,6 +100,7 @@ export class OnboardingService {
 
     return {
       companyName: onboarding.companyName,
+      companyUrl: onboarding.companyUrl || null,
       industry: onboarding.organization.industry
         ? {
             id: onboarding.organization.industry.id,

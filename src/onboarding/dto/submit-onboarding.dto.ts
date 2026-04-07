@@ -16,6 +16,11 @@ export class SubmitOnboardingDto {
   @MinLength(1)
   companyName: string;
 
+  @ApiPropertyOptional({ example: 'https://example.com' })
+  @IsOptional()
+  @IsString()
+  companyUrl?: string;
+
   @ApiProperty()
   @IsUUID()
   industryId: string;
