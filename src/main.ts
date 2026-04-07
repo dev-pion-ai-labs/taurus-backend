@@ -19,6 +19,12 @@ async function bootstrap() {
     credentials: true,
   });
 
+  // Root route — visible when opening the public URL in a browser
+  const httpAdapter = app.getHttpAdapter();
+  httpAdapter.get('/', (_req, res) => {
+    res.json({ status: 'ok', service: 'taurus-backend', timestamp: new Date().toISOString() });
+  });
+
   // Global prefix
   app.setGlobalPrefix('api/v1');
 
