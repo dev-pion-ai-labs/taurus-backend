@@ -17,7 +17,9 @@ import { AnalysisProcessor } from './analysis.processor';
             connection: {
               host: parsed.hostname,
               port: parseInt(parsed.port, 10),
+              username: parsed.username || undefined,
               password: parsed.password || undefined,
+              maxRetriesPerRequest: null,
             },
           };
         }
@@ -26,6 +28,7 @@ import { AnalysisProcessor } from './analysis.processor';
             host: configService.get<string>('redis.host'),
             port: configService.get<number>('redis.port'),
             password: configService.get<string>('redis.password') || undefined,
+            maxRetriesPerRequest: null,
           },
         };
       },
@@ -43,7 +46,8 @@ import { AnalysisProcessor } from './analysis.processor';
       {
         name: 'analysis',
         defaultJobOptions: {
-          attempts: 2,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
           removeOnComplete: 100,
           removeOnFail: 50,
         },

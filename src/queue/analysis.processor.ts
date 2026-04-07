@@ -87,29 +87,24 @@ export class AnalysisProcessor extends WorkerHost {
     sessionId: string,
     organizationId: string,
   ): Promise<ReportGenerationContext> {
-    // 1. Organization + industry
-    const org = await this.prisma.organization.findUniqueOrThrow({
-      where: { id: organizationId },
-      include: { industry: true },
-    });
-
-    // 2. Onboarding data
-    const onboarding = await this.prisma.onboarding.findUnique({
-      where: { organizationId },
-    });
-
-    // 3. Departments & workflows
-    const departments = await this.prisma.department.findMany({
-      where: { organizationId },
-      include: { workflows: true },
-    });
-
-    // 4. Session answers with questions
-    const sessionQuestions = await this.prisma.sessionQuestion.findMany({
-      where: { sessionId, answeredAt: { not: null } },
-      include: { question: true },
-      orderBy: { orderIndex: 'asc' },
-    });
+    const [org, onboarding, departments, sessionQuestions] = await Promise.all([
+      this.prisma.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        include: { industry: true },
+      }),
+      this.prisma.onboarding.findUnique({
+        where: { organizationId },
+      }),
+      this.prisma.department.findMany({
+        where: { organizationId },
+        include: { workflows: true },
+      }),
+      this.prisma.sessionQuestion.findMany({
+        where: { sessionId, answeredAt: { not: null } },
+        include: { question: true },
+        orderBy: { orderIndex: 'asc' },
+      }),
+    ]);
 
     return {
       organization: {
