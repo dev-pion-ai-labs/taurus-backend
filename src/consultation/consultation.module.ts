@@ -9,6 +9,7 @@ import { TemplateGeneratorService } from './template/template-generator.service'
 import { TemplateGeneratorProcessor } from './template/template-generator.processor';
 import { TemplateController } from './template/template.controller';
 import { SessionService } from './session/session.service';
+import { ReportService } from './session/report.service';
 import { SessionController } from './session/session.controller';
 
 @Module({
@@ -21,6 +22,7 @@ import { SessionController } from './session/session.controller';
     TemplateGeneratorService,
     TemplateGeneratorProcessor,
     SessionService,
+    ReportService,
   ],
   exports: [IndustryService, TemplateService, TemplateGeneratorService],
 })

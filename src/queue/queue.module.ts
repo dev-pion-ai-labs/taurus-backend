@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
+import { AiModule } from '../ai';
 import { AnalysisProcessor } from './analysis.processor';
 
 @Module({
   imports: [
+    AiModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
