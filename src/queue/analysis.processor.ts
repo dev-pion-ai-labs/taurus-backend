@@ -24,17 +24,26 @@ export class AnalysisProcessor extends WorkerHost {
 
   async process(job: Job<ReportGenerationJob>) {
     const { reportId, sessionId, organizationId } = job.data;
+    const start = Date.now();
     this.logger.log(
-      `Processing report generation for session ${sessionId}, report ${reportId}`,
+      `[${reportId}] Starting report generation (session: ${sessionId}, attempt: ${job.attemptsMade + 1}/${job.opts.attempts ?? '?'})`,
     );
 
     try {
       // Gather all context
+      const ctxStart = Date.now();
       const context = await this.gatherContext(sessionId, organizationId);
+      this.logger.log(
+        `[${reportId}] Context gathered in ${Date.now() - ctxStart}ms — ${context.departments.length} departments, ${context.consultationAnswers.length} answers`,
+      );
 
       // Generate report via Claude
+      const aiStart = Date.now();
       const reportData =
         await this.aiService.generateTransformationReport(context);
+      this.logger.log(
+        `[${reportId}] AI generation completed in ${((Date.now() - aiStart) / 1000).toFixed(1)}s — score: ${reportData.overallScore}, ${reportData.departmentScores.length} depts, ${reportData.recommendations.length} recs`,
+      );
 
       // Calculate financial totals
       const totalEfficiencyValue = reportData.departmentScores.reduce(
@@ -47,6 +56,7 @@ export class AnalysisProcessor extends WorkerHost {
       );
 
       // Save report
+      const saveStart = Date.now();
       await this.prisma.transformationReport.update({
         where: { id: reportId },
         data: {
@@ -66,11 +76,11 @@ export class AnalysisProcessor extends WorkerHost {
       });
 
       this.logger.log(
-        `Report ${reportId} generated successfully. Score: ${reportData.overallScore}, Value: $${(totalEfficiencyValue + totalGrowthValue).toLocaleString()}`,
+        `[${reportId}] Report saved in ${Date.now() - saveStart}ms. Total: ${((Date.now() - start) / 1000).toFixed(1)}s | Value: $${(totalEfficiencyValue + totalGrowthValue).toLocaleString()}`,
       );
     } catch (error) {
       this.logger.error(
-        `Report generation failed for ${reportId}: ${error.message}`,
+        `[${reportId}] Report generation failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${error.message}`,
         error.stack,
       );
 

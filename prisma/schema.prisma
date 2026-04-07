@@ -367,6 +367,10 @@ model Onboarding {
   selectedGoals String[] @default([]) @map("selected_goals")
   customGoals   String?  @map("custom_goals") @db.Text
 
+  // Cached AI insights (regenerated when profile changes)
+  aiInsights Json?     @map("ai_insights")
+  insightsAt DateTime? @map("insights_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

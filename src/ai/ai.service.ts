@@ -134,14 +134,30 @@ Return a JSON object with this exact structure:
   ): Promise<TransformationReportData> {
     const { system, user } = buildReportGenerationPrompt(context);
 
+    this.logger.log(`Report generation starting — model: ${this.model}, max_tokens: 16384`);
+
     for (let attempt = 0; attempt < 3; attempt++) {
+      const attemptStart = Date.now();
       try {
+        this.logger.log(`Report attempt ${attempt + 1}/3 — calling Claude API...`);
+
         const response = await this.client.messages.create({
           model: this.model,
-          max_tokens: 8192,
+          max_tokens: 16384,
           system,
           messages: [{ role: 'user', content: user }],
         });
+
+        const elapsed = ((Date.now() - attemptStart) / 1000).toFixed(1);
+        this.logger.log(
+          `Report attempt ${attempt + 1}/3 — API responded in ${elapsed}s, stop_reason: ${response.stop_reason}, usage: ${response.usage.input_tokens} in / ${response.usage.output_tokens} out`,
+        );
+
+        if (response.stop_reason === 'max_tokens') {
+          throw new Error(
+            `Response truncated at ${response.usage.output_tokens} output tokens — increase max_tokens`,
+          );
+        }
 
         const text =
           response.content[0].type === 'text' ? response.content[0].text : '';
@@ -167,8 +183,9 @@ Return a JSON object with this exact structure:
 
         return report;
       } catch (error) {
+        const elapsed = ((Date.now() - attemptStart) / 1000).toFixed(1);
         this.logger.warn(
-          `AI report generation attempt ${attempt + 1} failed: ${error.message}`,
+          `Report attempt ${attempt + 1}/3 failed after ${elapsed}s: ${error.message}`,
         );
         if (attempt === 2) throw error;
       }
