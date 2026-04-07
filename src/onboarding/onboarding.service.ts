@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
 import { StorageService } from '../storage';
 import { AiService } from '../ai';
@@ -231,7 +232,7 @@ export class OnboardingService {
         },
         update: {
           ...onboardingData,
-          aiInsights: null,
+          aiInsights: Prisma.DbNull,
           insightsAt: null,
         },
       });
