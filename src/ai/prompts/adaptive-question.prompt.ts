@@ -49,7 +49,7 @@ Website Intelligence:
 - Services: ${ctx.scrapedInsights.services.join(', ') || 'Unknown'}`
     : '';
 
-  const user = `Generate 8-12 personalized consultation questions for this company.
+  const user = `Generate 4-5 personalized consultation questions for this company.
 
 Company Profile:
 - Name: ${ctx.organization.name}
@@ -104,7 +104,7 @@ Website Intelligence:
 - Tech Stack: ${ctx.scrapedInsights.technologies.join(', ') || 'Unknown'}`
     : '';
 
-  const user = `Based on this consultation so far, generate 3-5 adaptive follow-up questions.
+  const user = `Based on this consultation so far, generate 2-3 adaptive follow-up questions.
 
 Company: ${ctx.organization.name} (${ctx.organization.industry}, ${ctx.organization.size || 'size unknown'})
 ${scrapedSection}

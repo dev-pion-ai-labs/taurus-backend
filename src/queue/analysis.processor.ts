@@ -175,6 +175,7 @@ export class AnalysisProcessor extends WorkerHost {
           customGoals: true,
           availableData: true,
           customDataSources: true,
+          scrapedContent: true,
         },
       }),
       this.prisma.department.findMany({
@@ -188,12 +189,31 @@ export class AnalysisProcessor extends WorkerHost {
       }),
     ]);
 
+    // Extract scraped website intelligence if available
+    const scraped = onboarding?.scrapedContent as Record<string, any> | null;
+    const scrapedInsights = scraped?.businessData
+      ? {
+          title: scraped.title || null,
+          description: scraped.description || null,
+          products: (scraped.businessData.products || []).map((p: any) => p.name || p).filter(Boolean),
+          services: (scraped.businessData.services || []).map((s: any) => s.name || s).filter(Boolean),
+          technologies: scraped.businessData.technologies || [],
+          aiDetected: !!scraped.businessData.aiDetected,
+          aiMentions: scraped.businessData.aiMentions || [],
+          automationDetected: !!scraped.businessData.automationDetected,
+          automationMentions: scraped.businessData.automationMentions || [],
+          companyInfo: scraped.businessData.companyInfo || {},
+          businessModel: scraped.businessData.businessModel || null,
+        }
+      : undefined;
+
     return {
       organization: {
         name: org.name,
         industry: org.industry.name,
         size: org.size,
       },
+      scrapedInsights,
       onboarding: {
         businessDescription: onboarding?.businessDescription || '',
         revenueStreams: onboarding?.revenueStreams || '',

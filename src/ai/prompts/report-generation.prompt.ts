@@ -16,6 +16,19 @@ export interface ReportGenerationContext {
     dataSources: string[];
     customDataSources: string;
   };
+  scrapedInsights?: {
+    title: string | null;
+    description: string | null;
+    products: string[];
+    services: string[];
+    technologies: string[];
+    aiDetected: boolean;
+    aiMentions: string[];
+    automationDetected: boolean;
+    automationMentions: string[];
+    companyInfo: Record<string, string | undefined>;
+    businessModel: { type?: string; revenueStreams?: string[] } | null;
+  };
   departments: {
     name: string;
     headcount: number | null;
@@ -48,19 +61,39 @@ export function buildReportGenerationPrompt(ctx: ReportGenerationContext): {
   const minRecs = Math.max(5, minDepts * 2);
   const minPhases = 3;
 
-  const system = `You are an expert AI transformation consultant producing a board-ready AI Transformation Roadmap. You analyze companies with surgical precision and generate quantified, dollar-valued recommendations.
+  const system = `You are an expert AI transformation consultant producing a board-ready AI Transformation Roadmap. You analyze companies with surgical precision and generate quantified, dollar-valued recommendations grounded in real data.
 
 Return ONLY valid JSON matching the exact schema specified. No markdown, no commentary, no wrapping. Start with { and end with }.
 
-CRITICAL RULES for dollar values:
-- Calibrate ALL dollar values to the company's size and industry. A 10-person startup and a 500-person enterprise have very different values.
-- Use the average salary data if provided to calculate FTE savings accurately.
-- If no salary data, use industry benchmarks: Tech $95K, Finance $105K, Healthcare $85K, Retail $55K, default $75K.
-- Weekly hours saved × 52 weeks × (hourly rate) = annual value. Hourly rate = avg salary / 2080.
+═══ SCORING RUBRIC (overallScore & departmentScores) ═══
+Score based on CURRENT AI/automation adoption, NOT potential or product offering:
+  0-20  "AI Curious"    — No AI/automation in use. Fully manual processes. No data infrastructure.
+  21-40 "AI Aware"      — Some basic automation (email sequences, simple integrations). Awareness of AI but no meaningful deployment. Limited data utilization.
+  41-60 "AI Ready"      — Active use of AI tools in 1-2 areas. Some workflow automation. Data collected but not systematically leveraged. Team has basic AI literacy.
+  61-80 "AI Advancing"  — AI integrated into core workflows across multiple departments. Predictive analytics in use. Automated decision-making in at least one area. Systematic data pipelines.
+  81-100 "AI Native"    — AI-first operations. Most decisions augmented by AI. Closed-loop learning systems. Advanced automation across all departments. Real-time data-driven everything.
+
+IMPORTANT: Score what the company DOES internally, not what they sell. A company selling AI products but running manual internal operations scores low. Credit existing tools/integrations (Zapier, HubSpot workflows, etc.) proportionally.
+
+═══ FINANCIAL METHODOLOGY ═══
+All dollar values MUST be derived from traceable calculations, not round estimates:
+- Use provided avg salary per department. If missing, use industry benchmarks: Tech $95K, Finance $105K, Healthcare $85K, Retail $55K, default $75K.
+- Hourly rate = avg salary / 2080 hours.
+- Efficiency value = weeklyHoursSaved × 52 × hourlyRate × automationPotential%. This is cost savings from time freed.
+- Growth value = estimated revenue impact from better conversion, retention, speed-to-market, etc. Must be justified by a specific mechanism (e.g., "improving trial conversion from 8% to 12% on $X pipeline").
+- fteRedeployable = total weekly hours saved across all workflows / 40. These are hours freed, not layoffs — frame as capacity unlocked.
+- Do NOT inflate values to seem impressive. A 5-person startup cannot save $500K/year. Total AI value should be plausible as a % of estimated revenue/costs.
+- Phase totalValue = sum of action values in that phase. Must add up.
+
+═══ GENERATION RULES ═══
 - Generate ${minDepts} departments (use provided departments, add 1-2 inferred ones only if fewer than 3 were provided), ${minRecs} recommendations, and ${minPhases} implementation phases with 2-4 actions each.
 - Every recommendation must have a unique UUID as its "id" field.
 - All scores are integers 0-100. All dollar values are numbers (not strings).
-- Be concise in descriptions — 1 sentence max for currentState, potentialState, currentProcess, aiOpportunity. Keep the total output compact.`;
+- Department scores should have meaningful spread (not all within 5-10 points). Differentiate clearly.
+- Recommendations should reference specific findings from the consultation and website data — not generic advice.
+- executiveSummary.summary should be 3-5 sentences: lead with the single most important insight, then key opportunity, then the magnitude of value at stake.
+- keyFindings: 5-7 findings. Each should be specific to THIS company — mention their tools, their metrics, their stated challenges. Never generic.
+- Keep descriptions concise — 1-2 sentences max for currentState, potentialState, currentProcess, aiOpportunity.`;
 
   // Build departments section
   let departmentsText =
@@ -109,7 +142,18 @@ ${[...ctx.onboarding.goals, ctx.onboarding.customGoals].filter(Boolean).join(', 
 
 ═══ AVAILABLE DATA SOURCES ═══
 ${[...ctx.onboarding.dataSources, ctx.onboarding.customDataSources].filter(Boolean).join(', ')}
-
+${ctx.scrapedInsights ? `
+═══ WEBSITE INTELLIGENCE (scraped from company website) ═══
+Site: ${ctx.scrapedInsights.title || 'N/A'} — ${ctx.scrapedInsights.description || 'No description'}
+AI Usage Detected: ${ctx.scrapedInsights.aiDetected ? 'YES — ' + ctx.scrapedInsights.aiMentions.join(', ') : 'No'}
+Automation Detected: ${ctx.scrapedInsights.automationDetected ? 'YES — ' + ctx.scrapedInsights.automationMentions.join(', ') : 'No'}
+Technologies: ${ctx.scrapedInsights.technologies.join(', ') || 'Unknown'}
+Products: ${ctx.scrapedInsights.products.join(', ') || 'Unknown'}
+Services: ${ctx.scrapedInsights.services.join(', ') || 'Unknown'}
+${ctx.scrapedInsights.companyInfo ? `Company Info: ${Object.entries(ctx.scrapedInsights.companyInfo).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}
+${ctx.scrapedInsights.businessModel ? `Business Model: ${ctx.scrapedInsights.businessModel.type || 'Unknown'}${ctx.scrapedInsights.businessModel.revenueStreams?.length ? ' — Revenue: ' + ctx.scrapedInsights.businessModel.revenueStreams.join(', ') : ''}` : ''}
+USE THIS DATA to ground your analysis — reference specific technologies, products, and AI/automation findings in your scores and recommendations.
+` : ''}
 ═══ DEPARTMENTS & WORKFLOWS ═══
 ${departmentsText}
 
@@ -184,7 +228,13 @@ Return a JSON object with this EXACT structure:
   ]
 }
 
-Remember: Generate ${minDepts} departments${deptCount > 0 ? ' (use the provided ones, only infer if fewer than 3)' : ' (infer from industry)'}, ${minRecs} recommendations, and ${minPhases} phases with 2-4 actions each. All dollar values must be realistic for a ${ctx.organization.size || 'mid-size'}-employee ${ctx.organization.industry} company. Every recommendation needs a unique UUID. Keep descriptions concise — 1 sentence each.`;
+Remember:
+- Generate ${minDepts} departments${deptCount > 0 ? ' (use the provided ones, only infer if fewer than 3)' : ' (infer from industry)'}, ${minRecs} recommendations, and ${minPhases} phases with 2-4 actions each.
+- All dollar values must be traceable: show the math via the methodology above. A ${ctx.organization.size || 'mid-size'}-employee company cannot save more than a realistic % of its payroll.
+- Every recommendation needs a unique UUID.
+- Department scores should have at least 15-point spread between highest and lowest.
+- Reference specific consultation answers and website findings — not generic advice.
+- Keep descriptions concise — 1-2 sentences each.`;
 
   return { system, user };
 }
