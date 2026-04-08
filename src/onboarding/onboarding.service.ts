@@ -268,24 +268,88 @@ export class OnboardingService {
       });
     });
 
-    // Queue website scraping if URL provided (non-blocking)
+    // Queue website scraping if URL provided and not already running
     if (dto.companyUrl) {
-      // Update status to indicate scraping is queued
-      await this.prisma.onboarding.update({
+      const current = await this.prisma.onboarding.findUnique({
         where: { organizationId },
-        data: { scrapingStatus: 'QUEUED' },
+        select: { scrapingStatus: true },
       });
 
-      await this.analysisQueue.add('scrape-website', {
-        organizationId,
-        companyUrl: dto.companyUrl,
-      });
-      this.logger.log(
-        `Website scraping queued for organization ${organizationId}`,
-      );
+      const alreadyRunning =
+        current?.scrapingStatus === 'QUEUED' ||
+        current?.scrapingStatus === 'IN_PROGRESS' ||
+        current?.scrapingStatus === 'COMPLETED';
+
+      if (!alreadyRunning) {
+        await this.queueScraping(organizationId, dto.companyUrl);
+      }
     }
 
     return { success: true, message: 'Onboarding completed successfully' };
+  }
+
+  /**
+   * Trigger website scraping early (e.g. from step 1) so it runs in
+   * parallel while the user completes the rest of the questionnaire.
+   */
+  async startScraping(organizationId: string, companyUrl: string) {
+    if (!companyUrl) {
+      throw new BadRequestException('Company URL is required');
+    }
+
+    // Ensure onboarding record exists
+    const onboarding = await this.prisma.onboarding.findUnique({
+      where: { organizationId },
+    });
+
+    if (!onboarding) {
+      await this.prisma.onboarding.create({
+        data: { organizationId, companyUrl },
+      });
+      await this.queueScraping(organizationId, companyUrl);
+      return { status: 'QUEUED', message: 'Website scraping started' };
+    }
+
+    const urlChanged = onboarding.companyUrl !== companyUrl;
+    const status = onboarding.scrapingStatus;
+
+    // Update URL if changed
+    if (urlChanged) {
+      await this.prisma.onboarding.update({
+        where: { organizationId },
+        data: { companyUrl },
+      });
+    }
+
+    // Don't re-queue if already running with same URL
+    if (!urlChanged && (status === 'QUEUED' || status === 'IN_PROGRESS')) {
+      return { status, message: 'Scraping already in progress' };
+    }
+
+    // Already completed with same URL — no need to re-scrape
+    if (!urlChanged && status === 'COMPLETED') {
+      return { status, message: 'Scraping already completed' };
+    }
+
+    // New URL or previous attempt failed — queue fresh scrape
+    await this.queueScraping(organizationId, companyUrl);
+    return { status: 'QUEUED', message: 'Website scraping started' };
+  }
+
+  private async queueScraping(organizationId: string, companyUrl: string) {
+    await this.prisma.onboarding.update({
+      where: { organizationId },
+      data: { scrapingStatus: 'QUEUED' },
+    });
+
+    await this.analysisQueue.add('scrape-website', {
+      organizationId,
+      companyUrl,
+    });
+
+    this.logger.log(
+      `Website scraping queued for organization ${organizationId}`,
+    );
   }
 
   async getScrapingStatus(organizationId: string) {
@@ -300,7 +364,12 @@ export class OnboardingService {
     });
 
     if (!onboarding) {
-      throw new NotFoundException('Onboarding data not found');
+      return {
+        status: 'NOT_STARTED',
+        companyUrl: null,
+        scrapedContent: null,
+        scrapedAt: null,
+      };
     }
 
     return {

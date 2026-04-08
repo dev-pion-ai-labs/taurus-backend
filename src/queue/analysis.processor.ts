@@ -116,6 +116,11 @@ export class AnalysisProcessor extends WorkerHost {
 
         const scrapedData = await this.websiteScraper.scrapeWebsite(companyUrl);
 
+        // If scraper returned an error object (graceful failure), treat as failed
+        if (scrapedData.error && !scrapedData.title) {
+          throw new Error(`Scraping failed: ${scrapedData.error}`);
+        }
+
         // Update with completed data
         await this.prisma.onboarding.update({
           where: { organizationId },

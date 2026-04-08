@@ -81,6 +81,20 @@ export class OnboardingController {
     return this.onboardingService.getScrapingStatus(user.organizationId);
   }
 
+  @Post('scrape')
+  startScraping(
+    @CurrentUser() user: { id: string; organizationId: string | null },
+    @Body() body: { companyUrl: string },
+  ) {
+    if (!user.organizationId) {
+      throw new BadRequestException('User must belong to an organization');
+    }
+    return this.onboardingService.startScraping(
+      user.organizationId,
+      body.companyUrl,
+    );
+  }
+
   @Put('progress')
   saveProgress(
     @CurrentUser() user: { id: string; organizationId: string | null },
