@@ -16,9 +16,7 @@ export class DashboardController {
   constructor(private dashboardService: DashboardService) {}
 
   @Get('executive')
-  getExecutive(
-    @CurrentUser() user: { organizationId: string | null },
-  ) {
+  getExecutive(@CurrentUser() user: { organizationId: string | null }) {
     if (!user.organizationId) {
       throw new BadRequestException('User must belong to an organization');
     }

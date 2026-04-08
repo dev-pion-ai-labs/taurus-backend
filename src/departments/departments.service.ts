@@ -195,16 +195,15 @@ export class DepartmentsService {
 
     if (!dept) throw new NotFoundException('Department not found');
     if (dept.organizationId !== organizationId) {
-      throw new ForbiddenException('Department does not belong to your organization');
+      throw new ForbiddenException(
+        'Department does not belong to your organization',
+      );
     }
 
     return dept;
   }
 
-  private async findWorkflowOrFail(
-    workflowId: string,
-    organizationId: string,
-  ) {
+  private async findWorkflowOrFail(workflowId: string, organizationId: string) {
     const workflow = await this.prisma.workflow.findUnique({
       where: { id: workflowId },
       include: { department: true },
@@ -212,7 +211,9 @@ export class DepartmentsService {
 
     if (!workflow) throw new NotFoundException('Workflow not found');
     if (workflow.department.organizationId !== organizationId) {
-      throw new ForbiddenException('Workflow does not belong to your organization');
+      throw new ForbiddenException(
+        'Workflow does not belong to your organization',
+      );
     }
 
     return workflow;

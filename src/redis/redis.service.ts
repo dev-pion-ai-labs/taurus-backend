@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 @Injectable()
-export class RedisService extends Redis implements OnModuleInit, OnModuleDestroy {
+export class RedisService
+  extends Redis
+  implements OnModuleInit, OnModuleDestroy
+{
   constructor(configService: ConfigService) {
     const url = configService.get<string>('redis.url');
     if (url) {

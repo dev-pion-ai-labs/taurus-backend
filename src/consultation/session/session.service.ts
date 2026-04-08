@@ -39,9 +39,7 @@ export class SessionService {
     if (!industryTemplate) {
       // Trigger generation
       const generating =
-        await this.templateGeneratorService.generateForIndustry(
-          org.industryId,
-        );
+        await this.templateGeneratorService.generateForIndustry(org.industryId);
       if (generating.status === 'ACTIVE') {
         industryTemplate = await this.templateService.getIndustryTemplate(
           org.industryId,
@@ -203,7 +201,11 @@ export class SessionService {
       throw new BadRequestException('Question already answered');
 
     // Validate answer by type
-    this.validateAnswer(sessionQuestion.question.questionType, value, sessionQuestion.question.options);
+    this.validateAnswer(
+      sessionQuestion.question.questionType,
+      value,
+      sessionQuestion.question.options,
+    );
 
     await this.prisma.sessionQuestion.update({
       where: { id: sessionQuestion.id },
@@ -260,11 +262,15 @@ export class SessionService {
     switch (questionType) {
       case 'TEXT':
         if (typeof value !== 'string' || !value.trim())
-          throw new BadRequestException('TEXT answer must be a non-empty string');
+          throw new BadRequestException(
+            'TEXT answer must be a non-empty string',
+          );
         break;
       case 'SINGLE_CHOICE':
         if (typeof value !== 'string')
-          throw new BadRequestException('SINGLE_CHOICE answer must be a string');
+          throw new BadRequestException(
+            'SINGLE_CHOICE answer must be a string',
+          );
         if (options && Array.isArray(options) && !options.includes(value))
           throw new BadRequestException('Answer not in valid options');
         break;
@@ -274,7 +280,9 @@ export class SessionService {
         if (options && Array.isArray(options)) {
           const invalid = value.filter((v) => !options.includes(v));
           if (invalid.length)
-            throw new BadRequestException(`Invalid options: ${invalid.join(', ')}`);
+            throw new BadRequestException(
+              `Invalid options: ${invalid.join(', ')}`,
+            );
         }
         break;
       case 'SCALE':
@@ -292,7 +300,9 @@ export class SessionService {
         take: query.limit,
         orderBy: { createdAt: 'desc' },
         include: {
-          user: { select: { id: true, email: true, firstName: true, lastName: true } },
+          user: {
+            select: { id: true, email: true, firstName: true, lastName: true },
+          },
           report: { select: { id: true, status: true } },
           _count: { select: { questions: true } },
         },

@@ -65,7 +65,9 @@ export class OnboardingService {
 
     const data: Record<string, unknown> = {};
     for (const field of ONBOARDING_DATA_FIELDS) {
-      data[field] = onboarding[field] ?? (field.startsWith('selected') || field === 'availableData' ? [] : '');
+      data[field] =
+        onboarding[field] ??
+        (field.startsWith('selected') || field === 'availableData' ? [] : '');
     }
 
     return {
@@ -198,7 +200,11 @@ export class OnboardingService {
     return { success: true };
   }
 
-  async submit(userId: string, organizationId: string, dto: SubmitOnboardingDto) {
+  async submit(
+    userId: string,
+    organizationId: string,
+    dto: SubmitOnboardingDto,
+  ) {
     // Validate cross-field requirements
     this.validateSubmission(dto);
 
@@ -257,10 +263,7 @@ export class OnboardingService {
     return { success: true, message: 'Onboarding completed successfully' };
   }
 
-  async uploadDocument(
-    organizationId: string,
-    file: Express.Multer.File,
-  ) {
+  async uploadDocument(organizationId: string, file: Express.Multer.File) {
     // Ensure onboarding record exists
     let onboarding = await this.prisma.onboarding.findUnique({
       where: { organizationId },
@@ -305,10 +308,7 @@ export class OnboardingService {
     return document;
   }
 
-  async deleteDocument(
-    documentId: string,
-    organizationId: string,
-  ) {
+  async deleteDocument(documentId: string, organizationId: string) {
     // Find the document and verify ownership
     const document = await this.prisma.onboardingDocument.findUnique({
       where: { id: documentId },

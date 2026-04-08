@@ -13,16 +13,21 @@ export interface WrappedResponse<T> {
 }
 
 @Injectable()
-export class TransformResponseInterceptor<T>
-  implements NestInterceptor<T, WrappedResponse<T>>
-{
+export class TransformResponseInterceptor<T> implements NestInterceptor<
+  T,
+  WrappedResponse<T>
+> {
   intercept(
     _context: ExecutionContext,
     next: CallHandler,
   ): Observable<WrappedResponse<T>> {
     return next.handle().pipe(
       map((responseData) => {
-        if (responseData && typeof responseData === 'object' && 'data' in responseData) {
+        if (
+          responseData &&
+          typeof responseData === 'object' &&
+          'data' in responseData
+        ) {
           return responseData as WrappedResponse<T>;
         }
         return { data: responseData };

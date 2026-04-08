@@ -23,7 +23,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {
-    this.resend = new Resend(this.configService.get<string>('resend.apiKey')!);
+    this.resend = new Resend(this.configService.get<string>('resend.apiKey'));
     this.fromEmail = this.configService.get<string>('resend.fromEmail')!;
   }
 
@@ -136,7 +136,9 @@ export class AuthService {
 
     const refreshToken = crypto.randomUUID();
     const tokenHash = this.hashToken(refreshToken);
-    const refreshExpirationStr = this.configService.get<string>('jwt.refreshExpiration')!;
+    const refreshExpirationStr = this.configService.get<string>(
+      'jwt.refreshExpiration',
+    )!;
     const expiresAt = this.parseExpiration(refreshExpirationStr);
 
     await this.prisma.refreshToken.create({

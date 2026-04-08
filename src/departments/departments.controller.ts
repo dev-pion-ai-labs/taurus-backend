@@ -32,13 +32,13 @@ export class DepartmentsController {
   @Get()
   list(@CurrentUser() user: { organizationId: string | null }) {
     this.requireOrg(user.organizationId);
-    return this.departmentsService.listDepartments(user.organizationId!);
+    return this.departmentsService.listDepartments(user.organizationId);
   }
 
   @Get('summary')
   summary(@CurrentUser() user: { organizationId: string | null }) {
     this.requireOrg(user.organizationId);
-    return this.departmentsService.getSummary(user.organizationId!);
+    return this.departmentsService.getSummary(user.organizationId);
   }
 
   @Post()
@@ -47,7 +47,7 @@ export class DepartmentsController {
     @Body() dto: CreateDepartmentDto,
   ) {
     this.requireOrg(user.organizationId);
-    return this.departmentsService.createDepartment(user.organizationId!, dto);
+    return this.departmentsService.createDepartment(user.organizationId, dto);
   }
 
   @Patch(':id')
@@ -57,7 +57,11 @@ export class DepartmentsController {
     @Body() dto: UpdateDepartmentDto,
   ) {
     this.requireOrg(user.organizationId);
-    return this.departmentsService.updateDepartment(id, user.organizationId!, dto);
+    return this.departmentsService.updateDepartment(
+      id,
+      user.organizationId,
+      dto,
+    );
   }
 
   @Delete(':id')
@@ -66,7 +70,7 @@ export class DepartmentsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     this.requireOrg(user.organizationId);
-    return this.departmentsService.deleteDepartment(id, user.organizationId!);
+    return this.departmentsService.deleteDepartment(id, user.organizationId);
   }
 
   // ── Workflows ────────────────────────────────────────────
@@ -77,7 +81,7 @@ export class DepartmentsController {
     @Body() dto: CreateWorkflowDto,
   ) {
     this.requireOrg(user.organizationId);
-    return this.departmentsService.createWorkflow(user.organizationId!, dto);
+    return this.departmentsService.createWorkflow(user.organizationId, dto);
   }
 
   @Patch('workflows/:id')
@@ -87,7 +91,7 @@ export class DepartmentsController {
     @Body() dto: UpdateWorkflowDto,
   ) {
     this.requireOrg(user.organizationId);
-    return this.departmentsService.updateWorkflow(id, user.organizationId!, dto);
+    return this.departmentsService.updateWorkflow(id, user.organizationId, dto);
   }
 
   @Delete('workflows/:id')
@@ -96,7 +100,7 @@ export class DepartmentsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     this.requireOrg(user.organizationId);
-    return this.departmentsService.deleteWorkflow(id, user.organizationId!);
+    return this.departmentsService.deleteWorkflow(id, user.organizationId);
   }
 
   // ── Helper ───────────────────────────────────────────────

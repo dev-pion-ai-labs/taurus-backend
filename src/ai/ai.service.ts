@@ -48,11 +48,16 @@ export class AiService {
 
         const raw =
           response.content[0].type === 'text' ? response.content[0].text : '';
-        const text = raw.replace(/```json?\s*\n?/gi, '').replace(/```\s*/gi, '').trim();
+        const text = raw
+          .replace(/```json?\s*\n?/gi, '')
+          .replace(/```\s*/gi, '')
+          .trim();
         const questions: GeneratedQuestion[] = JSON.parse(text);
 
         if (!Array.isArray(questions) || questions.length < 5) {
-          throw new Error(`Expected array of 5+ questions, got ${questions.length}`);
+          throw new Error(
+            `Expected array of 5+ questions, got ${questions.length}`,
+          );
         }
 
         return questions;
@@ -115,7 +120,10 @@ Return a JSON object with this exact structure:
 
         const raw =
           response.content[0].type === 'text' ? response.content[0].text : '';
-        const text = raw.replace(/```json?\s*\n?/gi, '').replace(/```\s*$/gi, '').trim();
+        const text = raw
+          .replace(/```json?\s*\n?/gi, '')
+          .replace(/```\s*$/gi, '')
+          .trim();
         const insights: OnboardingInsights = JSON.parse(text);
         return insights;
       } catch (error) {
@@ -134,12 +142,16 @@ Return a JSON object with this exact structure:
   ): Promise<TransformationReportData> {
     const { system, user } = buildReportGenerationPrompt(context);
 
-    this.logger.log(`Report generation starting — model: ${this.model}, max_tokens: 16384`);
+    this.logger.log(
+      `Report generation starting — model: ${this.model}, max_tokens: 16384`,
+    );
 
     for (let attempt = 0; attempt < 3; attempt++) {
       const attemptStart = Date.now();
       try {
-        this.logger.log(`Report attempt ${attempt + 1}/3 — calling Claude API...`);
+        this.logger.log(
+          `Report attempt ${attempt + 1}/3 — calling Claude API...`,
+        );
 
         const response = await this.client.messages.create({
           model: this.model,

@@ -25,7 +25,10 @@ export class CreateWorkflowDto {
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional({ example: 20, description: 'Hours per week spent on this workflow' })
+  @ApiPropertyOptional({
+    example: 20,
+    description: 'Hours per week spent on this workflow',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)

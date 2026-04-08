@@ -22,7 +22,7 @@ export class ReportService {
     });
     if (!session) throw new NotFoundException('Session not found');
     if (session.organizationId !== organizationId) {
-      throw new ForbiddenException('Not your organization\'s session');
+      throw new ForbiddenException("Not your organization's session");
     }
 
     const report = await this.prisma.transformationReport.findUnique({
@@ -47,10 +47,12 @@ export class ReportService {
     });
     if (!session) throw new NotFoundException('Session not found');
     if (session.organizationId !== organizationId) {
-      throw new ForbiddenException('Not your organization\'s session');
+      throw new ForbiddenException("Not your organization's session");
     }
     if (session.status !== 'COMPLETED') {
-      throw new BadRequestException('Session must be completed to regenerate report');
+      throw new BadRequestException(
+        'Session must be completed to regenerate report',
+      );
     }
 
     // Verify user is ADMIN
