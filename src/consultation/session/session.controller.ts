@@ -53,12 +53,7 @@ export class SessionController {
     @CurrentUser('id') userId: string,
     @Body() dto: SubmitAnswerDto,
   ) {
-    return this.sessionService.submitAnswer(
-      id,
-      userId,
-      dto.questionId,
-      dto.value,
-    );
+    return this.sessionService.submitAnswer(id, userId, dto.questionId, dto.value);
   }
 
   @Patch(':id/abandon')

@@ -210,8 +210,12 @@ export class AnalysisProcessor extends WorkerHost {
       })),
       consultationAnswers: sessionQuestions.map((sq) => ({
         section: sq.section,
-        question: sq.question.questionText,
-        questionType: sq.question.questionType,
+        question: sq.isAdaptive
+          ? sq.adaptiveText!
+          : sq.question!.questionText,
+        questionType: sq.isAdaptive
+          ? sq.adaptiveType!
+          : sq.question!.questionType,
         answer: (sq.answer as any)?.value ?? sq.answer,
       })),
     };
