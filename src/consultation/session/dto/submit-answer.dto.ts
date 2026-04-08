@@ -2,7 +2,7 @@ import { IsUUID, IsNotEmpty } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class SubmitAnswerDto {
-  @ApiProperty()
+  @ApiProperty({ description: 'The SessionQuestion id (not the TemplateQuestion id)' })
   @IsUUID()
   questionId: string;
 

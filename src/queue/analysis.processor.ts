@@ -3,12 +3,18 @@ import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { PrismaService } from '../prisma';
 import { AiService } from '../ai';
+import { WebsiteScraperService } from '../onboarding/website-scraper.service';
 import type { ReportGenerationContext } from '../ai/prompts/report-generation.prompt';
 
 interface ReportGenerationJob {
   reportId: string;
   sessionId: string;
   organizationId: string;
+}
+
+interface WebsiteScrapingJob {
+  organizationId: string;
+  companyUrl: string;
 }
 
 @Processor('analysis', { concurrency: 2 })
@@ -18,78 +24,132 @@ export class AnalysisProcessor extends WorkerHost {
   constructor(
     private prisma: PrismaService,
     private aiService: AiService,
+    private websiteScraper: WebsiteScraperService,
   ) {
     super();
   }
 
-  async process(job: Job<ReportGenerationJob>) {
-    const { reportId, sessionId, organizationId } = job.data;
-    const start = Date.now();
-    this.logger.log(
-      `[${reportId}] Starting report generation (session: ${sessionId}, attempt: ${job.attemptsMade + 1}/${job.opts.attempts ?? '?'})`,
-    );
-
-    try {
-      // Gather all context
-      const ctxStart = Date.now();
-      const context = await this.gatherContext(sessionId, organizationId);
+  async process(job: Job<ReportGenerationJob | WebsiteScrapingJob>) {
+    if (job.name === 'generate-report') {
+      const { reportId, sessionId, organizationId } =
+        job.data as ReportGenerationJob;
+      const start = Date.now();
       this.logger.log(
-        `[${reportId}] Context gathered in ${Date.now() - ctxStart}ms — ${context.departments.length} departments, ${context.consultationAnswers.length} answers`,
+        `[${reportId}] Starting report generation (session: ${sessionId}, attempt: ${job.attemptsMade + 1}/${job.opts.attempts ?? '?'})`,
       );
 
-      // Generate report via Claude
-      const aiStart = Date.now();
-      const reportData =
-        await this.aiService.generateTransformationReport(context);
+      try {
+        // Gather all context
+        const ctxStart = Date.now();
+        const context = await this.gatherContext(sessionId, organizationId);
+        this.logger.log(
+          `[${reportId}] Context gathered in ${Date.now() - ctxStart}ms — ${context.departments.length} departments, ${context.consultationAnswers.length} answers`,
+        );
+
+        // Generate report via Claude
+        const aiStart = Date.now();
+        const reportData =
+          await this.aiService.generateTransformationReport(context);
+        this.logger.log(
+          `[${reportId}] AI generation completed in ${((Date.now() - aiStart) / 1000).toFixed(1)}s — score: ${reportData.overallScore}, ${reportData.departmentScores.length} depts, ${reportData.recommendations.length} recs`,
+        );
+
+        // Calculate financial totals
+        const totalEfficiencyValue = reportData.departmentScores.reduce(
+          (sum, d) => sum + (d.efficiencyValue || 0),
+          0,
+        );
+        const totalGrowthValue = reportData.departmentScores.reduce(
+          (sum, d) => sum + (d.growthValue || 0),
+          0,
+        );
+
+        // Save report
+        const saveStart = Date.now();
+        await this.prisma.transformationReport.update({
+          where: { id: reportId },
+          data: {
+            status: 'COMPLETED',
+            overallScore: reportData.overallScore,
+            maturityLevel: reportData.maturityLevel,
+            totalEfficiencyValue,
+            totalGrowthValue,
+            totalAiValue: totalEfficiencyValue + totalGrowthValue,
+            fteRedeployable: reportData.fteRedeployable,
+            executiveSummary: reportData.executiveSummary as any,
+            departmentScores: reportData.departmentScores as any,
+            recommendations: reportData.recommendations as any,
+            implementationPlan: reportData.implementationPlan as any,
+            generatedAt: new Date(),
+          },
+        });
+
+        this.logger.log(
+          `[${reportId}] Report saved in ${Date.now() - saveStart}ms. Total: ${((Date.now() - start) / 1000).toFixed(1)}s | Value: $${(totalEfficiencyValue + totalGrowthValue).toLocaleString()}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `[${reportId}] Report generation failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+
+        await this.prisma.transformationReport.update({
+          where: { id: reportId },
+          data: { status: 'FAILED' },
+        });
+
+        throw error;
+      }
+    } else if (job.name === 'scrape-website') {
+      const { organizationId, companyUrl } = job.data as WebsiteScrapingJob;
+      const start = Date.now();
       this.logger.log(
-        `[${reportId}] AI generation completed in ${((Date.now() - aiStart) / 1000).toFixed(1)}s — score: ${reportData.overallScore}, ${reportData.departmentScores.length} depts, ${reportData.recommendations.length} recs`,
+        `[${organizationId}] Starting website scraping for ${companyUrl}`,
       );
 
-      // Calculate financial totals
-      const totalEfficiencyValue = reportData.departmentScores.reduce(
-        (sum, d) => sum + (d.efficiencyValue || 0),
-        0,
-      );
-      const totalGrowthValue = reportData.departmentScores.reduce(
-        (sum, d) => sum + (d.growthValue || 0),
-        0,
-      );
+      try {
+        // Update status to IN_PROGRESS
+        await this.prisma.onboarding.update({
+          where: { organizationId },
+          data: { scrapingStatus: 'IN_PROGRESS' },
+        });
 
-      // Save report
-      const saveStart = Date.now();
-      await this.prisma.transformationReport.update({
-        where: { id: reportId },
-        data: {
-          status: 'COMPLETED',
-          overallScore: reportData.overallScore,
-          maturityLevel: reportData.maturityLevel,
-          totalEfficiencyValue,
-          totalGrowthValue,
-          totalAiValue: totalEfficiencyValue + totalGrowthValue,
-          fteRedeployable: reportData.fteRedeployable,
-          executiveSummary: reportData.executiveSummary as any,
-          departmentScores: reportData.departmentScores as any,
-          recommendations: reportData.recommendations as any,
-          implementationPlan: reportData.implementationPlan as any,
-          generatedAt: new Date(),
-        },
-      });
+        const scrapedData = await this.websiteScraper.scrapeWebsite(companyUrl);
 
-      this.logger.log(
-        `[${reportId}] Report saved in ${Date.now() - saveStart}ms. Total: ${((Date.now() - start) / 1000).toFixed(1)}s | Value: $${(totalEfficiencyValue + totalGrowthValue).toLocaleString()}`,
-      );
-    } catch (error) {
-      this.logger.error(
-        `[${reportId}] Report generation failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${error.message}`,
-        error.stack,
-      );
+        // If scraper returned an error object (graceful failure), treat as failed
+        if (scrapedData.error && !scrapedData.title) {
+          throw new Error(`Scraping failed: ${scrapedData.error}`);
+        }
 
-      await this.prisma.transformationReport.update({
-        where: { id: reportId },
-        data: { status: 'FAILED' },
-      });
+        // Update with completed data
+        await this.prisma.onboarding.update({
+          where: { organizationId },
+          data: {
+            scrapingStatus: 'COMPLETED',
+            scrapedContent: scrapedData as any,
+            scrapedAt: new Date(),
+          },
+        });
 
-      throw error;
+        this.logger.log(
+          `[${organizationId}] Website scraping completed in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+        );
+      } catch (error) {
+        // Update status to FAILED
+        await this.prisma.onboarding.update({
+          where: { organizationId },
+          data: { scrapingStatus: 'FAILED' },
+        });
+
+        this.logger.error(
+          `[${organizationId}] Website scraping failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+        throw error;
+      }
+    } else {
+      this.logger.error(`Unknown job type: ${job.name}`);
+      throw new Error(`Unknown job type: ${job.name}`);
     }
   }
 
@@ -150,8 +210,12 @@ export class AnalysisProcessor extends WorkerHost {
       })),
       consultationAnswers: sessionQuestions.map((sq) => ({
         section: sq.section,
-        question: sq.question.questionText,
-        questionType: sq.question.questionType,
+        question: sq.isAdaptive
+          ? sq.adaptiveText!
+          : sq.question!.questionText,
+        questionType: sq.isAdaptive
+          ? sq.adaptiveType!
+          : sq.question!.questionType,
         answer: (sq.answer as any)?.value ?? sq.answer,
       })),
     };

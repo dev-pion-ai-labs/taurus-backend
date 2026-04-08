@@ -6,6 +6,12 @@ import {
   buildReportGenerationPrompt,
   type ReportGenerationContext,
 } from './prompts/report-generation.prompt';
+import {
+  buildInitialQuestionsPrompt,
+  buildAdaptiveFollowUpPrompt,
+  type AdaptiveQuestionContext,
+  type GeneratedAdaptiveQuestion,
+} from './prompts/adaptive-question.prompt';
 
 export interface GeneratedQuestion {
   questionText: string;
@@ -204,6 +210,61 @@ Return a JSON object with this exact structure:
     }
 
     throw new Error('Failed to generate report after retries');
+  }
+
+  async generateInitialPersonalizedQuestions(
+    ctx: AdaptiveQuestionContext,
+  ): Promise<GeneratedAdaptiveQuestion[]> {
+    const { system, user } = buildInitialQuestionsPrompt(ctx);
+    return this.callForQuestions(system, user, 5, 'initial personalized');
+  }
+
+  async generateAdaptiveFollowUps(
+    ctx: AdaptiveQuestionContext,
+  ): Promise<GeneratedAdaptiveQuestion[]> {
+    const { system, user } = buildAdaptiveFollowUpPrompt(ctx);
+    return this.callForQuestions(system, user, 2, 'adaptive follow-up');
+  }
+
+  private async callForQuestions(
+    system: string,
+    user: string,
+    minExpected: number,
+    label: string,
+  ): Promise<GeneratedAdaptiveQuestion[]> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 4096,
+          system,
+          messages: [{ role: 'user', content: user }],
+        });
+
+        const raw =
+          response.content[0].type === 'text' ? response.content[0].text : '';
+        const text = raw
+          .replace(/```json?\s*\n?/gi, '')
+          .replace(/```\s*/gi, '')
+          .trim();
+        const questions: GeneratedAdaptiveQuestion[] = JSON.parse(text);
+
+        if (!Array.isArray(questions) || questions.length < minExpected) {
+          throw new Error(
+            `Expected ${minExpected}+ questions, got ${questions.length}`,
+          );
+        }
+
+        return questions;
+      } catch (error) {
+        this.logger.warn(
+          `AI ${label} generation attempt ${attempt + 1} failed: ${(error as Error).message}`,
+        );
+        if (attempt === 2) throw error;
+      }
+    }
+
+    throw new Error(`Failed to generate ${label} questions after retries`);
   }
 
   getModel(): string {

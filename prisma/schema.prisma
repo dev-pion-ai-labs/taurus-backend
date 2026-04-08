@@ -49,6 +49,8 @@ enum QuestionSection {
   BASE
   INDUSTRY
   CHALLENGE_BONUS
+  PERSONALIZED
+  ADAPTIVE
 }
 
 // ─── Models ──────────────────────────────────────────────
@@ -226,17 +228,24 @@ model ConsultationSession {
 model SessionQuestion {
   id         String          @id @default(uuid())
   sessionId  String          @map("session_id")
-  questionId String          @map("question_id")
+  questionId String?         @map("question_id")
   section    QuestionSection
   orderIndex Int             @map("order_index")
   answer     Json?
   answeredAt DateTime?       @map("answered_at")
   skipped    Boolean         @default(false)
+
+  // Adaptive question fields (used when questionId is null)
+  isAdaptive      Boolean  @default(false) @map("is_adaptive")
+  adaptiveText    String?  @map("adaptive_text")
+  adaptiveType    String?  @map("adaptive_type")
+  adaptiveOptions Json?    @map("adaptive_options")
+
   createdAt  DateTime        @default(now()) @map("created_at")
   updatedAt  DateTime        @updatedAt @map("updated_at")
 
   session  ConsultationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  question TemplateQuestion    @relation(fields: [questionId], references: [id])
+  question TemplateQuestion?   @relation(fields: [questionId], references: [id])
 
   @@unique([sessionId, questionId])
   @@index([sessionId, orderIndex])
@@ -370,6 +379,11 @@ model Onboarding {
   // Cached AI insights (regenerated when profile changes)
   aiInsights Json?     @map("ai_insights")
   insightsAt DateTime? @map("insights_at")
+
+  // Scraped website content
+  scrapedContent Json?     @map("scraped_content")
+  scrapedAt     DateTime? @map("scraped_at")
+  scrapingStatus String?  @default("NOT_STARTED") @map("scraping_status")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

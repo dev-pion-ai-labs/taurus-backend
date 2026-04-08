@@ -3,12 +3,16 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
 import { StorageService } from '../storage';
 import { AiService } from '../ai';
 import { SaveProgressDto, SubmitOnboardingDto } from './dto';
+import { WebsiteScraperService } from './website-scraper.service';
 import { v4 as uuidv4 } from 'uuid';
 
 // Fields that map directly from DTO to Prisma model
@@ -32,10 +36,14 @@ const ONBOARDING_DATA_FIELDS = [
 
 @Injectable()
 export class OnboardingService {
+  private readonly logger = new Logger(OnboardingService.name);
+
   constructor(
     private prisma: PrismaService,
     private storage: StorageService,
     private ai: AiService,
+    private websiteScraper: WebsiteScraperService,
+    @InjectQueue('analysis') private analysisQueue: Queue,
   ) {}
 
   async getStatus(organizationId: string) {
@@ -260,10 +268,119 @@ export class OnboardingService {
       });
     });
 
+    // Queue website scraping if URL provided and not already running
+    if (dto.companyUrl) {
+      const current = await this.prisma.onboarding.findUnique({
+        where: { organizationId },
+        select: { scrapingStatus: true },
+      });
+
+      const alreadyRunning =
+        current?.scrapingStatus === 'QUEUED' ||
+        current?.scrapingStatus === 'IN_PROGRESS' ||
+        current?.scrapingStatus === 'COMPLETED';
+
+      if (!alreadyRunning) {
+        await this.queueScraping(organizationId, dto.companyUrl);
+      }
+    }
+
     return { success: true, message: 'Onboarding completed successfully' };
   }
 
-  async uploadDocument(organizationId: string, file: Express.Multer.File) {
+  /**
+   * Trigger website scraping early (e.g. from step 1) so it runs in
+   * parallel while the user completes the rest of the questionnaire.
+   */
+  async startScraping(organizationId: string, companyUrl: string) {
+    if (!companyUrl) {
+      throw new BadRequestException('Company URL is required');
+    }
+
+    // Ensure onboarding record exists
+    const onboarding = await this.prisma.onboarding.findUnique({
+      where: { organizationId },
+    });
+
+    if (!onboarding) {
+      await this.prisma.onboarding.create({
+        data: { organizationId, companyUrl },
+      });
+      await this.queueScraping(organizationId, companyUrl);
+      return { status: 'QUEUED', message: 'Website scraping started' };
+    }
+
+    const urlChanged = onboarding.companyUrl !== companyUrl;
+    const status = onboarding.scrapingStatus;
+
+    // Update URL if changed
+    if (urlChanged) {
+      await this.prisma.onboarding.update({
+        where: { organizationId },
+        data: { companyUrl },
+      });
+    }
+
+    // Don't re-queue if already running with same URL
+    if (!urlChanged && (status === 'QUEUED' || status === 'IN_PROGRESS')) {
+      return { status, message: 'Scraping already in progress' };
+    }
+
+    // Already completed with same URL — no need to re-scrape
+    if (!urlChanged && status === 'COMPLETED') {
+      return { status, message: 'Scraping already completed' };
+    }
+
+    // New URL or previous attempt failed — queue fresh scrape
+    await this.queueScraping(organizationId, companyUrl);
+    return { status: 'QUEUED', message: 'Website scraping started' };
+  }
+
+  private async queueScraping(organizationId: string, companyUrl: string) {
+    await this.prisma.onboarding.update({
+      where: { organizationId },
+      data: { scrapingStatus: 'QUEUED' },
+    });
+
+    await this.analysisQueue.add('scrape-website', {
+      organizationId,
+      companyUrl,
+    });
+
+    this.logger.log(
+      `Website scraping queued for organization ${organizationId}`,
+    );
+  }
+
+  async getScrapingStatus(organizationId: string) {
+    const onboarding = await this.prisma.onboarding.findUnique({
+      where: { organizationId },
+      select: {
+        scrapingStatus: true,
+        scrapedContent: true,
+        scrapedAt: true,
+        companyUrl: true,
+      },
+    });
+
+    if (!onboarding) {
+      return {
+        status: 'NOT_STARTED',
+        companyUrl: null,
+        scrapedContent: null,
+        scrapedAt: null,
+      };
+    }
+
+    return {
+      status: onboarding.scrapingStatus || 'NOT_STARTED',
+      companyUrl: onboarding.companyUrl,
+      scrapedContent: onboarding.scrapedContent,
+      scrapedAt: onboarding.scrapedAt,
+    };
+  }
+
+  async uploadDocument(organizationId: string, file: any) {
     // Ensure onboarding record exists
     let onboarding = await this.prisma.onboarding.findUnique({
       where: { organizationId },

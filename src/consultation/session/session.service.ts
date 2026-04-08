@@ -11,17 +11,46 @@ import { PrismaService } from '../../prisma';
 import { TemplateService } from '../template/template.service';
 import { TemplateGeneratorService } from '../template/template-generator.service';
 import { PaginationQueryDto, PaginatedResponseDto } from '../../common';
+import { QuestionSection, Prisma } from '@prisma/client';
+import type { AdaptiveQuestionContext } from '../../ai/prompts/adaptive-question.prompt';
+
+/** How many unanswered questions must remain before we generate more. */
+const BUFFER_THRESHOLD = 3;
+/** Hard cap — session never exceeds this many questions. */
+const MAX_QUESTIONS = 25;
+/** How long to cache org context in memory (ms). */
+const CONTEXT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+interface CachedOrgContext {
+  organization: { name: string; industry: string; size: string | null };
+  onboarding: {
+    businessDescription: string;
+    revenueStreams: string;
+    challenges: string[];
+    tools: string[];
+    goals: string[];
+  };
+  scrapedInsights?: AdaptiveQuestionContext['scrapedInsights'];
+  expiresAt: number;
+}
 
 @Injectable()
 export class SessionService {
   private readonly logger = new Logger(SessionService.name);
+  private readonly orgContextCache = new Map<string, CachedOrgContext>();
 
   constructor(
     private prisma: PrismaService,
     private templateService: TemplateService,
     private templateGeneratorService: TemplateGeneratorService,
     @InjectQueue('analysis') private analysisQueue: Queue,
+    @InjectQueue('template-generation')
+    private templateQueue: Queue,
   ) {}
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Start Session
+  // ──────────────────────────────────────────────────────────────────────
 
   async startSession(userId: string, orgId: string) {
     const org = await this.prisma.organization.findUnique({
@@ -29,47 +58,47 @@ export class SessionService {
     });
     if (!org) throw new NotFoundException('Organization not found');
 
+    // Always grab the base template for core questions
     const baseTemplate = await this.templateService.getBaseTemplate();
-    let industryTemplate = await this.templateService.getIndustryTemplate(
-      org.industryId,
-    );
-
-    let status: 'IN_PROGRESS' | 'PENDING_TEMPLATE' = 'IN_PROGRESS';
-
-    if (!industryTemplate) {
-      // Trigger generation
-      const generating =
-        await this.templateGeneratorService.generateForIndustry(org.industryId);
-      if (generating.status === 'ACTIVE') {
-        industryTemplate = await this.templateService.getIndustryTemplate(
-          org.industryId,
-        );
-      } else {
-        status = 'PENDING_TEMPLATE';
-      }
-    }
 
     const session = await this.prisma.consultationSession.create({
       data: {
         organizationId: orgId,
         userId,
-        status,
+        status: 'IN_PROGRESS',
         baseTemplateId: baseTemplate.id,
-        industryTemplateId: industryTemplate?.id || null,
+        industryTemplateId: null,
       },
     });
 
-    // Compile session questions
-    if (status === 'IN_PROGRESS') {
-      await this.compileSessionQuestions(
-        session.id,
-        baseTemplate,
-        industryTemplate ?? undefined,
-      );
-    }
+    // 1. Add predefined core questions immediately (user sees these first)
+    let orderIndex = 0;
+    const coreQuestions = baseTemplate.questions.map((q) => ({
+      sessionId: session.id,
+      questionId: q.id,
+      section: 'BASE' as const,
+      orderIndex: orderIndex++,
+    }));
+
+    await this.prisma.sessionQuestion.createMany({ data: coreQuestions });
+
+    // 2. Queue personalized question generation in background
+    //    These will be ready by the time user finishes core questions
+    await this.templateQueue.add('generate-personalized-batch', {
+      sessionId: session.id,
+      organizationId: orgId,
+    });
+
+    this.logger.log(
+      `Session ${session.id} started with ${coreQuestions.length} core questions, personalized batch queued`,
+    );
 
     return this.getSession(session.id, userId);
   }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Compile Session Questions (legacy — kept for template generator compat)
+  // ──────────────────────────────────────────────────────────────────────
 
   async compileSessionQuestions(
     sessionId: string,
@@ -78,7 +107,6 @@ export class SessionService {
   ) {
     let orderIndex = 0;
 
-    // Base questions first
     const baseQuestions = baseTemplate.questions.map((q) => ({
       sessionId,
       questionId: q.id,
@@ -86,7 +114,6 @@ export class SessionService {
       orderIndex: orderIndex++,
     }));
 
-    // Then industry questions
     const industryQuestions = (industryTemplate?.questions || []).map((q) => ({
       sessionId,
       questionId: q.id,
@@ -98,6 +125,64 @@ export class SessionService {
       data: [...baseQuestions, ...industryQuestions],
     });
   }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Append Adaptive Questions
+  // ──────────────────────────────────────────────────────────────────────
+
+  async appendAdaptiveQuestions(
+    sessionId: string,
+    questions: Array<{
+      questionText: string;
+      questionType: string;
+      options: string[] | null;
+    }>,
+    section: QuestionSection,
+  ) {
+    // Get current max orderIndex
+    const lastQ = await this.prisma.sessionQuestion.findFirst({
+      where: { sessionId },
+      orderBy: { orderIndex: 'desc' },
+      select: { orderIndex: true },
+    });
+
+    let orderIndex = (lastQ?.orderIndex ?? -1) + 1;
+
+    // Check we don't exceed the cap
+    const currentCount = await this.prisma.sessionQuestion.count({
+      where: { sessionId },
+    });
+    const slotsLeft = MAX_QUESTIONS - currentCount;
+    const toAdd = questions.slice(0, slotsLeft);
+
+    if (toAdd.length === 0) {
+      this.logger.log(
+        `Session ${sessionId} at max questions (${MAX_QUESTIONS}), skipping append`,
+      );
+      return 0;
+    }
+
+    await this.prisma.sessionQuestion.createMany({
+      data: toAdd.map((q) => ({
+        sessionId,
+        section,
+        orderIndex: orderIndex++,
+        isAdaptive: true,
+        adaptiveText: q.questionText,
+        adaptiveType: q.questionType,
+        adaptiveOptions: q.options ?? Prisma.JsonNull,
+      })),
+    });
+
+    this.logger.log(
+      `Appended ${toAdd.length} ${section} questions to session ${sessionId}`,
+    );
+    return toAdd.length;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Get Session
+  // ──────────────────────────────────────────────────────────────────────
 
   async getSession(sessionId: string, userId: string) {
     const session = await this.prisma.consultationSession.findUnique({
@@ -140,6 +225,10 @@ export class SessionService {
     return session;
   }
 
+  // ──────────────────────────────────────────────────────────────────────
+  //  Get Current Question (normalized for adaptive + template questions)
+  // ──────────────────────────────────────────────────────────────────────
+
   async getCurrentQuestion(sessionId: string, userId: string) {
     const session = await this.prisma.consultationSession.findUnique({
       where: { id: sessionId },
@@ -149,7 +238,7 @@ export class SessionService {
       throw new ForbiddenException('Not your session');
 
     if (session.status !== 'IN_PROGRESS') {
-      return { status: session.status, question: null };
+      return { status: session.status, question: null, progress: null };
     }
 
     const nextQuestion = await this.prisma.sessionQuestion.findFirst({
@@ -169,17 +258,40 @@ export class SessionService {
       where: { sessionId, answeredAt: { not: null } },
     });
 
+    // Normalize: if adaptive, synthesize the `question` field so the frontend
+    // sees the same shape regardless of question source.
+    const normalized = nextQuestion
+      ? {
+          ...nextQuestion,
+          question: nextQuestion.question ?? {
+            id: nextQuestion.id,
+            templateId: null,
+            questionText: nextQuestion.adaptiveText,
+            questionType: nextQuestion.adaptiveType,
+            options: nextQuestion.adaptiveOptions,
+            isRequired: true,
+            orderIndex: nextQuestion.orderIndex,
+            metadata: null,
+            createdAt: nextQuestion.createdAt,
+          },
+        }
+      : null;
+
     return {
       status: session.status,
-      question: nextQuestion,
+      question: normalized,
       progress: { answered, total },
     };
   }
 
+  // ──────────────────────────────────────────────────────────────────────
+  //  Submit Answer
+  // ──────────────────────────────────────────────────────────────────────
+
   async submitAnswer(
     sessionId: string,
     userId: string,
-    questionId: string,
+    sessionQuestionId: string,
     value: string | string[] | number,
   ) {
     const session = await this.prisma.consultationSession.findUnique({
@@ -191,31 +303,59 @@ export class SessionService {
     if (session.status !== 'IN_PROGRESS')
       throw new BadRequestException('Session is not in progress');
 
+    // Look up by SessionQuestion id (works for both template and adaptive)
     const sessionQuestion = await this.prisma.sessionQuestion.findUnique({
-      where: { sessionId_questionId: { sessionId, questionId } },
+      where: { id: sessionQuestionId },
       include: { question: true },
     });
-    if (!sessionQuestion)
+    if (!sessionQuestion || sessionQuestion.sessionId !== sessionId)
       throw new NotFoundException('Question not found in session');
     if (sessionQuestion.answeredAt)
       throw new BadRequestException('Question already answered');
 
-    // Validate answer by type
-    this.validateAnswer(
-      sessionQuestion.question.questionType,
-      value,
-      sessionQuestion.question.options,
+    // Resolve question type and options (adaptive vs template)
+    const questionType = sessionQuestion.isAdaptive
+      ? sessionQuestion.adaptiveType!
+      : sessionQuestion.question!.questionType;
+    const options = sessionQuestion.isAdaptive
+      ? sessionQuestion.adaptiveOptions
+      : sessionQuestion.question!.options;
+
+    this.validateAnswer(questionType, value, options);
+
+    // Save answer + fetch all session questions in parallel (1 write + 1 read instead of 1 write + 3 reads)
+    const [, allQuestions] = await Promise.all([
+      this.prisma.sessionQuestion.update({
+        where: { id: sessionQuestion.id },
+        data: { answer: { value }, answeredAt: new Date() },
+      }),
+      this.prisma.sessionQuestion.findMany({
+        where: { sessionId },
+        orderBy: { orderIndex: 'asc' },
+        include: { question: true },
+      }),
+    ]);
+
+    // Derive remaining, total, and next question in memory — zero additional DB calls
+    const totalQuestions = allQuestions.length;
+    // Exclude the question we just answered from "remaining"
+    const unanswered = allQuestions.filter(
+      (q) => q.id !== sessionQuestion.id && !q.answeredAt && !q.skipped,
     );
+    const remaining = unanswered.length;
+    const nextRaw = unanswered[0] ?? null;
 
-    await this.prisma.sessionQuestion.update({
-      where: { id: sessionQuestion.id },
-      data: { answer: { value }, answeredAt: new Date() },
-    });
-
-    // Check if all questions answered
-    const remaining = await this.prisma.sessionQuestion.count({
-      where: { sessionId, answeredAt: null, skipped: false },
-    });
+    // Queue adaptive generation when buffer is low but not empty
+    if (remaining > 0 && remaining <= BUFFER_THRESHOLD && totalQuestions < MAX_QUESTIONS) {
+      this.templateQueue
+        .add('generate-adaptive-followup', {
+          sessionId,
+          organizationId: session.organizationId,
+        })
+        .catch((err) =>
+          this.logger.warn(`Failed to queue adaptive generation: ${err.message}`),
+        );
+    }
 
     if (remaining === 0) {
       const completedSession = await this.prisma.consultationSession.update({
@@ -223,7 +363,6 @@ export class SessionService {
         data: { status: 'COMPLETED', completedAt: new Date() },
       });
 
-      // Auto-generate transformation report
       const report = await this.prisma.transformationReport.create({
         data: {
           sessionId: completedSession.id,
@@ -244,14 +383,29 @@ export class SessionService {
       return { status: 'COMPLETED', nextQuestion: null };
     }
 
-    // Get next question
-    const nextQuestion = await this.prisma.sessionQuestion.findFirst({
-      where: { sessionId, answeredAt: null, skipped: false },
-      orderBy: { orderIndex: 'asc' },
-      include: { question: true },
-    });
+    // Normalize next question for frontend
+    const nextQuestion = nextRaw
+      ? {
+          ...nextRaw,
+          question: nextRaw.question ?? {
+            id: nextRaw.id,
+            templateId: null,
+            questionText: nextRaw.adaptiveText,
+            questionType: nextRaw.adaptiveType,
+            options: nextRaw.adaptiveOptions,
+            isRequired: true,
+            orderIndex: nextRaw.orderIndex,
+            metadata: null,
+            createdAt: nextRaw.createdAt,
+          },
+        }
+      : null;
 
-    return { status: 'IN_PROGRESS', nextQuestion };
+    return {
+      status: 'IN_PROGRESS' as const,
+      nextQuestion,
+      progress: { answered: totalQuestions - remaining, total: totalQuestions },
+    };
   }
 
   private validateAnswer(
@@ -291,6 +445,102 @@ export class SessionService {
         break;
     }
   }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Build Adaptive Context (shared by queue processor)
+  // ──────────────────────────────────────────────────────────────────────
+
+  async buildAdaptiveContext(
+    sessionId: string,
+    organizationId: string,
+  ): Promise<AdaptiveQuestionContext> {
+    // Org + onboarding data doesn't change during a session — cache it
+    const orgCtx = await this.getOrgContext(organizationId);
+
+    // Always fetch fresh answers (these change every submission)
+    const answeredQuestions = await this.prisma.sessionQuestion.findMany({
+      where: { sessionId, answeredAt: { not: null } },
+      include: { question: true },
+      orderBy: { orderIndex: 'asc' },
+    });
+
+    return {
+      ...orgCtx,
+      previousQA: answeredQuestions.map((sq) => ({
+        question: sq.isAdaptive
+          ? sq.adaptiveText!
+          : sq.question!.questionText,
+        questionType: sq.isAdaptive
+          ? sq.adaptiveType!
+          : sq.question!.questionType,
+        answer: (sq.answer as any)?.value ?? sq.answer,
+        section: sq.section,
+      })),
+    };
+  }
+
+  private async getOrgContext(organizationId: string): Promise<Omit<AdaptiveQuestionContext, 'previousQA'>> {
+    const cached = this.orgContextCache.get(organizationId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return {
+        organization: cached.organization,
+        onboarding: cached.onboarding,
+        scrapedInsights: cached.scrapedInsights,
+      };
+    }
+
+    const [org, onboarding] = await Promise.all([
+      this.prisma.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        include: { industry: true },
+      }),
+      this.prisma.onboarding.findUnique({
+        where: { organizationId },
+      }),
+    ]);
+
+    const scraped = onboarding?.scrapedContent as any;
+    const scrapedInsights = scraped?.businessData
+      ? {
+          aiDetected: scraped.businessData.aiDetected ?? false,
+          aiMentions: scraped.businessData.aiMentions ?? [],
+          automationDetected: scraped.businessData.automationDetected ?? false,
+          automationMentions: scraped.businessData.automationMentions ?? [],
+          technologies: scraped.businessData.technologies ?? [],
+          products:
+            scraped.businessData.products?.map((p: any) => p.name || p) ?? [],
+          services:
+            scraped.businessData.services?.map((s: any) => s.name || s) ?? [],
+        }
+      : undefined;
+
+    const result = {
+      organization: {
+        name: org.name,
+        industry: org.industry.name,
+        size: org.size,
+      },
+      onboarding: {
+        businessDescription: onboarding?.businessDescription || '',
+        revenueStreams: onboarding?.revenueStreams || '',
+        challenges: onboarding?.selectedChallenges || [],
+        tools: onboarding?.selectedTools || [],
+        goals: onboarding?.selectedGoals || [],
+      },
+      scrapedInsights,
+    };
+
+    this.orgContextCache.set(organizationId, {
+      ...result,
+      expiresAt: Date.now() + CONTEXT_CACHE_TTL,
+    });
+
+    return result;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  List / Abandon
+  // ──────────────────────────────────────────────────────────────────────
 
   async listSessions(orgId: string, query: PaginationQueryDto) {
     const [sessions, total] = await Promise.all([
