@@ -496,6 +496,14 @@ export class SessionService {
       }),
       this.prisma.onboarding.findUnique({
         where: { organizationId },
+        select: {
+          businessDescription: true,
+          revenueStreams: true,
+          selectedChallenges: true,
+          selectedTools: true,
+          selectedGoals: true,
+          scrapedContent: true,
+        },
       }),
     ]);
 

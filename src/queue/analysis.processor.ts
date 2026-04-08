@@ -164,6 +164,18 @@ export class AnalysisProcessor extends WorkerHost {
       }),
       this.prisma.onboarding.findUnique({
         where: { organizationId },
+        select: {
+          businessDescription: true,
+          revenueStreams: true,
+          selectedChallenges: true,
+          customChallenges: true,
+          selectedTools: true,
+          customTools: true,
+          selectedGoals: true,
+          customGoals: true,
+          availableData: true,
+          customDataSources: true,
+        },
       }),
       this.prisma.department.findMany({
         where: { organizationId },
