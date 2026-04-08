@@ -8,6 +8,6 @@ export default defineConfig({
     seed: 'npx ts-node prisma/seed.ts',
   },
   datasource: {
-    url: process.env.DATABASE_URL!,
+    url: 'postgresql://postgres:OcifFrbFbUvcPSBCkhsVHogbivBuNRXe@junction.proxy.rlwy.net:37003/railway',
   },
 });
