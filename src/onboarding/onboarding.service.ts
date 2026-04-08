@@ -3,12 +3,16 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
 import { StorageService } from '../storage';
 import { AiService } from '../ai';
 import { SaveProgressDto, SubmitOnboardingDto } from './dto';
+import { WebsiteScraperService } from './website-scraper.service';
 import { v4 as uuidv4 } from 'uuid';
 
 // Fields that map directly from DTO to Prisma model
@@ -32,10 +36,14 @@ const ONBOARDING_DATA_FIELDS = [
 
 @Injectable()
 export class OnboardingService {
+  private readonly logger = new Logger(OnboardingService.name);
+
   constructor(
     private prisma: PrismaService,
     private storage: StorageService,
     private ai: AiService,
+    private websiteScraper: WebsiteScraperService,
+    @InjectQueue('analysis') private analysisQueue: Queue,
   ) {}
 
   async getStatus(organizationId: string) {
@@ -260,10 +268,50 @@ export class OnboardingService {
       });
     });
 
+    // Queue website scraping if URL provided (non-blocking)
+    if (dto.companyUrl) {
+      // Update status to indicate scraping is queued
+      await this.prisma.onboarding.update({
+        where: { organizationId },
+        data: { scrapingStatus: 'QUEUED' },
+      });
+
+      await this.analysisQueue.add('scrape-website', {
+        organizationId,
+        companyUrl: dto.companyUrl,
+      });
+      this.logger.log(
+        `Website scraping queued for organization ${organizationId}`,
+      );
+    }
+
     return { success: true, message: 'Onboarding completed successfully' };
   }
 
-  async uploadDocument(organizationId: string, file: Express.Multer.File) {
+  async getScrapingStatus(organizationId: string) {
+    const onboarding = await this.prisma.onboarding.findUnique({
+      where: { organizationId },
+      select: {
+        scrapingStatus: true,
+        scrapedContent: true,
+        scrapedAt: true,
+        companyUrl: true,
+      },
+    });
+
+    if (!onboarding) {
+      throw new NotFoundException('Onboarding data not found');
+    }
+
+    return {
+      status: onboarding.scrapingStatus || 'NOT_STARTED',
+      companyUrl: onboarding.companyUrl,
+      scrapedContent: onboarding.scrapedContent,
+      scrapedAt: onboarding.scrapedAt,
+    };
+  }
+
+  async uploadDocument(organizationId: string, file: any) {
     // Ensure onboarding record exists
     let onboarding = await this.prisma.onboarding.findUnique({
       where: { organizationId },

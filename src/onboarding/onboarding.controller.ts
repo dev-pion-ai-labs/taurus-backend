@@ -71,6 +71,16 @@ export class OnboardingController {
     return this.onboardingService.getInsights(user.organizationId);
   }
 
+  @Get('scraping-status')
+  getScrapingStatus(
+    @CurrentUser() user: { id: string; organizationId: string | null },
+  ) {
+    if (!user.organizationId) {
+      throw new BadRequestException('User must belong to an organization');
+    }
+    return this.onboardingService.getScrapingStatus(user.organizationId);
+  }
+
   @Put('progress')
   saveProgress(
     @CurrentUser() user: { id: string; organizationId: string | null },

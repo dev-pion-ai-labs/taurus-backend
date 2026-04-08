@@ -371,6 +371,11 @@ model Onboarding {
   aiInsights Json?     @map("ai_insights")
   insightsAt DateTime? @map("insights_at")
 
+  // Scraped website content
+  scrapedContent Json?     @map("scraped_content")
+  scrapedAt     DateTime? @map("scraped_at")
+  scrapingStatus String?  @default("NOT_STARTED") @map("scraping_status")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
