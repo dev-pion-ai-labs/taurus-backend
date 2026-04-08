@@ -17,7 +17,7 @@ import type { AdaptiveQuestionContext } from '../../ai/prompts/adaptive-question
 /** How many unanswered questions must remain before we generate more. */
 const BUFFER_THRESHOLD = 3;
 /** Hard cap — session never exceeds this many questions. */
-const MAX_QUESTIONS = 25;
+const MAX_QUESTIONS = 20;
 /** How long to cache org context in memory (ms). */
 const CONTEXT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
@@ -238,7 +238,17 @@ export class SessionService {
       throw new ForbiddenException('Not your session');
 
     if (session.status !== 'IN_PROGRESS') {
-      return { status: session.status, question: null, progress: null };
+      const [total, answered] = await Promise.all([
+        this.prisma.sessionQuestion.count({ where: { sessionId } }),
+        this.prisma.sessionQuestion.count({
+          where: { sessionId, answeredAt: { not: null } },
+        }),
+      ]);
+      return {
+        status: session.status,
+        question: null,
+        progress: { answered, total },
+      };
     }
 
     const nextQuestion = await this.prisma.sessionQuestion.findFirst({
