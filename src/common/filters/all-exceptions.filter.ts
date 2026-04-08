@@ -34,9 +34,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
           message = 'Validation failed';
         }
       }
-    } else if (
-      exception instanceof Prisma.PrismaClientKnownRequestError
-    ) {
+    } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       if (exception.code === 'P2002') {
         status = HttpStatus.CONFLICT;
         message = 'Resource already exists';

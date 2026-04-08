@@ -22,7 +22,11 @@ async function bootstrap() {
   // Root route — visible when opening the public URL in a browser
   const httpAdapter = app.getHttpAdapter();
   httpAdapter.get('/', (_req, res) => {
-    res.json({ status: 'ok', service: 'taurus-backend', timestamp: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      service: 'taurus-backend',
+      timestamp: new Date().toISOString(),
+    });
   });
 
   // Global prefix

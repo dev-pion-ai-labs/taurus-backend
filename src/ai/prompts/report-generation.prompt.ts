@@ -63,7 +63,8 @@ CRITICAL RULES for dollar values:
 - Be concise in descriptions — 1 sentence max for currentState, potentialState, currentProcess, aiOpportunity. Keep the total output compact.`;
 
   // Build departments section
-  let departmentsText = 'No departments mapped yet — infer standard departments from the industry and company size.';
+  let departmentsText =
+    'No departments mapped yet — infer standard departments from the industry and company size.';
   if (ctx.departments.length > 0) {
     departmentsText = ctx.departments
       .map((d) => {

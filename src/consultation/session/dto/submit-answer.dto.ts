@@ -6,7 +6,10 @@ export class SubmitAnswerDto {
   @IsUUID()
   questionId: string;
 
-  @ApiProperty({ description: 'Answer value — string, string[], or number depending on question type' })
+  @ApiProperty({
+    description:
+      'Answer value — string, string[], or number depending on question type',
+  })
   @IsNotEmpty()
   value: string | string[] | number;
 }

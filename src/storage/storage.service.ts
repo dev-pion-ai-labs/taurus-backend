@@ -18,10 +18,7 @@ export class StorageService {
    * Save a file to local storage.
    * Returns the relative storage path.
    */
-  async saveFile(
-    storagePath: string,
-    buffer: Buffer,
-  ): Promise<string> {
+  async saveFile(storagePath: string, buffer: Buffer): Promise<string> {
     const fullPath = path.join(this.uploadDir, storagePath);
     this.ensureDir(path.dirname(fullPath));
     await fs.promises.writeFile(fullPath, buffer);

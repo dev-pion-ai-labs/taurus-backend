@@ -37,7 +37,9 @@ export class OnboardingController {
   constructor(private onboardingService: OnboardingService) {}
 
   @Get('status')
-  getStatus(@CurrentUser() user: { id: string; organizationId: string | null }) {
+  getStatus(
+    @CurrentUser() user: { id: string; organizationId: string | null },
+  ) {
     if (!user.organizationId) {
       return {
         completed: false,
@@ -50,7 +52,9 @@ export class OnboardingController {
   }
 
   @Get('profile')
-  getProfile(@CurrentUser() user: { id: string; organizationId: string | null }) {
+  getProfile(
+    @CurrentUser() user: { id: string; organizationId: string | null },
+  ) {
     if (!user.organizationId) {
       throw new BadRequestException('User must belong to an organization');
     }
@@ -58,7 +62,9 @@ export class OnboardingController {
   }
 
   @Get('insights')
-  getInsights(@CurrentUser() user: { id: string; organizationId: string | null }) {
+  getInsights(
+    @CurrentUser() user: { id: string; organizationId: string | null },
+  ) {
     if (!user.organizationId) {
       throw new BadRequestException('User must belong to an organization');
     }
@@ -88,11 +94,7 @@ export class OnboardingController {
         'User must belong to an organization to submit onboarding',
       );
     }
-    return this.onboardingService.submit(
-      user.id,
-      user.organizationId,
-      dto,
-    );
+    return this.onboardingService.submit(user.id, user.organizationId, dto);
   }
 
   @Post('documents')
@@ -126,10 +128,7 @@ export class OnboardingController {
     if (!file) {
       throw new BadRequestException('File is required');
     }
-    return this.onboardingService.uploadDocument(
-      user.organizationId,
-      file,
-    );
+    return this.onboardingService.uploadDocument(user.organizationId, file);
   }
 
   @Delete('documents/:id')

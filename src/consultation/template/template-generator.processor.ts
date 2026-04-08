@@ -97,7 +97,11 @@ export class TemplateGeneratorProcessor extends WorkerHost {
           status: 'PENDING_TEMPLATE',
           organization: { industryId },
         },
-        include: { baseTemplate: { include: { questions: { orderBy: { orderIndex: 'asc' } } } } },
+        include: {
+          baseTemplate: {
+            include: { questions: { orderBy: { orderIndex: 'asc' } } },
+          },
+        },
       });
 
       if (pendingSessions.length) {
@@ -105,7 +109,8 @@ export class TemplateGeneratorProcessor extends WorkerHost {
           `Unblocking ${pendingSessions.length} pending sessions`,
         );
 
-        const newIndustryTemplate = await this.templateService.getIndustryTemplate(industryId);
+        const newIndustryTemplate =
+          await this.templateService.getIndustryTemplate(industryId);
 
         for (const session of pendingSessions) {
           await this.prisma.consultationSession.update({

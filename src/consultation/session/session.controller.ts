@@ -12,11 +12,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SessionService } from './session.service';
 import { ReportService } from './report.service';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
-import {
-  JwtAuthGuard,
-  CurrentUser,
-  PaginationQueryDto,
-} from '../../common';
+import { JwtAuthGuard, CurrentUser, PaginationQueryDto } from '../../common';
 
 @ApiTags('Consultation Sessions')
 @ApiBearerAuth()
@@ -42,18 +38,12 @@ export class SessionController {
   }
 
   @Get(':id')
-  findOne(
-    @Param('id') id: string,
-    @CurrentUser('id') userId: string,
-  ) {
+  findOne(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.sessionService.getSessionWithReport(id, userId);
   }
 
   @Get(':id/current-question')
-  currentQuestion(
-    @Param('id') id: string,
-    @CurrentUser('id') userId: string,
-  ) {
+  currentQuestion(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.sessionService.getCurrentQuestion(id, userId);
   }
 
@@ -63,14 +53,16 @@ export class SessionController {
     @CurrentUser('id') userId: string,
     @Body() dto: SubmitAnswerDto,
   ) {
-    return this.sessionService.submitAnswer(id, userId, dto.questionId, dto.value);
+    return this.sessionService.submitAnswer(
+      id,
+      userId,
+      dto.questionId,
+      dto.value,
+    );
   }
 
   @Patch(':id/abandon')
-  abandon(
-    @Param('id') id: string,
-    @CurrentUser('id') userId: string,
-  ) {
+  abandon(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.sessionService.abandonSession(id, userId);
   }
 
