@@ -1,2 +1,1 @@
--- AlterTable
-ALTER TABLE "onboardings" ADD COLUMN "scraping_status" TEXT DEFAULT 'NOT_STARTED';
+-- No-op: scraping_status column already created in 20260407170000_add_onboarding_insights_cache
