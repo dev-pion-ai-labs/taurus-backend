@@ -79,6 +79,28 @@ export class DashboardService {
         effort: r.effort,
       }));
 
+    // Tracker stats
+    const trackerActions = await this.prisma.transformationAction.findMany({
+      where: { organizationId },
+      select: { status: true, estimatedValue: true, blockerNote: true },
+    });
+
+    let trackerValueRealized = 0;
+    let trackerValueIdentified = 0;
+    let activeActions = 0;
+    let completedActions = 0;
+    let blockedActions = 0;
+
+    for (const action of trackerActions) {
+      trackerValueIdentified += action.estimatedValue || 0;
+      if (action.status === 'DEPLOYED' || action.status === 'VERIFIED') {
+        trackerValueRealized += action.estimatedValue || 0;
+        completedActions++;
+      }
+      if (action.status === 'IN_PROGRESS') activeActions++;
+      if (action.blockerNote) blockedActions++;
+    }
+
     return {
       // Maturity
       currentScore: latest?.overallScore ?? null,
@@ -100,6 +122,16 @@ export class DashboardService {
 
       // Top recs
       topRecommendations,
+
+      // Tracker
+      tracker: {
+        valueRealized: trackerValueRealized,
+        valueIdentified: trackerValueIdentified,
+        activeActions,
+        completedActions,
+        blockedActions,
+        totalActions: trackerActions.length,
+      },
     };
   }
 }

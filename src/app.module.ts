@@ -13,6 +13,7 @@ import { ConsultationModule } from './consultation';
 import { OnboardingModule } from './onboarding';
 import { DepartmentsModule } from './departments';
 import { DashboardModule } from './dashboard';
+import { TrackerModule } from './tracker/tracker.module';
 import { StorageModule } from './storage';
 import { HealthModule } from './health/health.module';
 
@@ -41,6 +42,7 @@ import { HealthModule } from './health/health.module';
     OnboardingModule,
     DepartmentsModule,
     DashboardModule,
+    TrackerModule,
     HealthModule,
   ],
   providers: [

@@ -53,6 +53,35 @@ enum QuestionSection {
   ADAPTIVE
 }
 
+enum ActionStatus {
+  BACKLOG
+  THIS_SPRINT
+  IN_PROGRESS
+  AWAITING_APPROVAL
+  DEPLOYED
+  VERIFIED
+}
+
+enum ActionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum EstimatedEffort {
+  HOURS
+  DAYS
+  WEEKS
+  MONTHS
+}
+
+enum SprintStatus {
+  PLANNING
+  ACTIVE
+  COMPLETED
+}
+
 // ─── Models ──────────────────────────────────────────────
 
 model Industry {
@@ -82,6 +111,8 @@ model Organization {
   onboarding  Onboarding?
   departments Department[]
   reports     TransformationReport[]
+  trackerActions TransformationAction[]
+  sprints        Sprint[]
 
   @@index([industryId])
   @@map("organizations")
@@ -102,6 +133,8 @@ model User {
   refreshTokens RefreshToken[]
   sessions      ConsultationSession[]
   otpCodes      OtpCode[]
+  assignedActions TransformationAction[] @relation("ActionAssignee")
+  actionComments  ActionComment[]
 
   @@index([organizationId])
   @@map("users")
@@ -219,6 +252,7 @@ model ConsultationSession {
   industryTemplate ConsultationTemplate? @relation("IndustryTemplate", fields: [industryTemplateId], references: [id])
   questions        SessionQuestion[]
   report           TransformationReport?
+  trackerActions   TransformationAction[]
 
   @@index([organizationId])
   @@index([status])
@@ -408,4 +442,82 @@ model OnboardingDocument {
 
   @@index([onboardingId])
   @@map("onboarding_documents")
+}
+
+// ─── Transformation Tracker (Module 5) ──────────────────
+
+model TransformationAction {
+  id                     String          @id @default(uuid())
+  organizationId         String          @map("organization_id")
+  sessionId              String?         @map("session_id")
+  sourceRecommendationId String?         @map("source_recommendation_id")
+
+  title                  String
+  description            String?         @db.Text
+  department             String?
+  category               String?         // EFFICIENCY | GROWTH | EXPERIENCE | INTELLIGENCE
+
+  status                 ActionStatus    @default(BACKLOG)
+  assigneeId             String?         @map("assignee_id")
+  priority               ActionPriority  @default(MEDIUM)
+
+  estimatedValue         Float?          @map("estimated_value")
+  actualValue            Float?          @map("actual_value")
+  estimatedEffort        EstimatedEffort? @map("estimated_effort")
+  phase                  Int?
+
+  orderIndex             Int             @default(0) @map("order_index")
+  dueDate                DateTime?       @map("due_date")
+  startedAt              DateTime?       @map("started_at")
+  deployedAt             DateTime?       @map("deployed_at")
+  verifiedAt             DateTime?       @map("verified_at")
+  blockerNote            String?         @map("blocker_note") @db.Text
+
+  sprintId               String?         @map("sprint_id")
+
+  createdAt              DateTime        @default(now()) @map("created_at")
+  updatedAt              DateTime        @updatedAt @map("updated_at")
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  session      ConsultationSession? @relation(fields: [sessionId], references: [id])
+  assignee     User?                @relation("ActionAssignee", fields: [assigneeId], references: [id])
+  sprint       Sprint?              @relation(fields: [sprintId], references: [id])
+  comments     ActionComment[]
+
+  @@index([organizationId, status])
+  @@index([sprintId])
+  @@map("transformation_actions")
+}
+
+model Sprint {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  name           String
+  number         Int
+  startDate      DateTime     @map("start_date")
+  endDate        DateTime     @map("end_date")
+  goal           String?      @db.Text
+  status         SprintStatus @default(PLANNING)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actions      TransformationAction[]
+
+  @@index([organizationId])
+  @@map("sprints")
+}
+
+model ActionComment {
+  id        String   @id @default(uuid())
+  actionId  String   @map("action_id")
+  userId    String   @map("user_id")
+  content   String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+
+  action TransformationAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  user   User                 @relation(fields: [userId], references: [id])
+
+  @@index([actionId])
+  @@map("action_comments")
 }
