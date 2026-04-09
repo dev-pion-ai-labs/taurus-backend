@@ -13,7 +13,6 @@ RUN npm run build
 
 FROM base AS production
 ENV NODE_ENV=production
-ENV DATABASE_URL=postgresql://postgres:OcifFrbFbUvcPSBCkhsVHogbivBuNRXe@postgres.railway.internal:5432/railway
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
