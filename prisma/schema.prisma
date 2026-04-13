@@ -109,6 +109,25 @@ enum ToolStatus {
   DEPRECATED
 }
 
+enum DeploymentPlanStatus {
+  DRAFT
+  PLANNING
+  PLAN_READY
+  APPROVED
+  EXECUTING
+  COMPLETED
+  FAILED
+}
+
+enum ArtifactType {
+  IMPLEMENTATION_GUIDE
+  CONFIGURATION_TEMPLATE
+  INTEGRATION_CHECKLIST
+  VENDOR_EVALUATION
+  CODE_SNIPPET
+  CUSTOM
+}
+
 // ─── Models ──────────────────────────────────────────────
 
 model Industry {
@@ -143,6 +162,7 @@ model Organization {
   discoveryReports DiscoveryReport[]
   toolEntries      ToolEntry[]
   toolSpendRecords ToolSpendRecord[]
+  deploymentPlans  DeploymentPlan[]
 
   @@index([industryId])
   @@map("organizations")
@@ -163,8 +183,9 @@ model User {
   refreshTokens RefreshToken[]
   sessions      ConsultationSession[]
   otpCodes      OtpCode[]
-  assignedActions TransformationAction[] @relation("ActionAssignee")
-  actionComments  ActionComment[]
+  assignedActions  TransformationAction[] @relation("ActionAssignee")
+  actionComments   ActionComment[]
+  deploymentPlans  DeploymentPlan[]
 
   @@index([organizationId])
   @@map("users")
@@ -511,8 +532,9 @@ model TransformationAction {
   organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   session      ConsultationSession? @relation(fields: [sessionId], references: [id])
   assignee     User?                @relation("ActionAssignee", fields: [assigneeId], references: [id])
-  sprint       Sprint?              @relation(fields: [sprintId], references: [id])
-  comments     ActionComment[]
+  sprint          Sprint?              @relation(fields: [sprintId], references: [id])
+  comments        ActionComment[]
+  deploymentPlans DeploymentPlan[]
 
   @@index([organizationId, status])
   @@index([sprintId])
@@ -632,4 +654,57 @@ model ToolSpendRecord {
   @@unique([toolEntryId, month])
   @@index([organizationId, month])
   @@map("tool_spend_records")
+}
+
+// ─── Implementation Engine (Module 4) ─────────────────
+
+model DeploymentPlan {
+  id             String               @id @default(uuid())
+  organizationId String               @map("organization_id")
+  actionId       String               @map("action_id")
+  userId         String               @map("user_id")
+
+  status         DeploymentPlanStatus @default(DRAFT)
+  title          String
+  summary        String?              @db.Text
+
+  conversationHistory Json?           @map("conversation_history")
+  steps               Json?           // [{ stepNumber, title, description, estimatedDuration, dependencies[] }]
+  prerequisites       Json?           // string[]
+  risks               Json?           // [{ risk, mitigation, severity }]
+  estimatedDuration   String?         @map("estimated_duration")
+  suggestedArtifacts  Json?           @map("suggested_artifacts") // ArtifactType[]
+
+  approvedAt     DateTime?            @map("approved_at")
+  approvedBy     String?              @map("approved_by")
+  rejectionNote  String?              @map("rejection_note") @db.Text
+  completedAt    DateTime?            @map("completed_at")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  action         TransformationAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  user           User                 @relation(fields: [userId], references: [id])
+  artifacts      DeploymentArtifact[]
+
+  @@index([organizationId])
+  @@index([actionId])
+  @@map("deployment_plans")
+}
+
+model DeploymentArtifact {
+  id         String       @id @default(uuid())
+  planId     String       @map("plan_id")
+  type       ArtifactType
+  title      String
+  content    String       @db.Text
+  metadata   Json?
+  orderIndex Int          @default(0) @map("order_index")
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+
+  plan       DeploymentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId])
+  @@map("deployment_artifacts")
 }

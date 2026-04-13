@@ -19,6 +19,7 @@ import { HealthModule } from './health/health.module';
 import { NotificationsModule } from './notifications';
 import { DiscoveryModule } from './discovery';
 import { StackModule } from './stack';
+import { ImplementationModule } from './implementation/implementation.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { StackModule } from './stack';
     TrackerModule,
     DiscoveryModule,
     StackModule,
+    ImplementationModule,
     HealthModule,
   ],
   providers: [

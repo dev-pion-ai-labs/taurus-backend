@@ -6,6 +6,7 @@ import { OnboardingModule } from '../onboarding';
 import { AnalysisProcessor } from './analysis.processor';
 import { TrackerStallProcessor } from './tracker-stall.processor';
 import { RenewalCheckProcessor } from './renewal-check.processor';
+import { ImplementationProcessor } from './implementation.processor';
 
 @Module({
   imports: [
@@ -74,9 +75,18 @@ import { RenewalCheckProcessor } from './renewal-check.processor';
           removeOnFail: 50,
         },
       },
+      {
+        name: 'implementation',
+        defaultJobOptions: {
+          attempts: 2,
+          backoff: { type: 'exponential', delay: 10000 },
+          removeOnComplete: 50,
+          removeOnFail: 25,
+        },
+      },
     ),
   ],
-  providers: [AnalysisProcessor, TrackerStallProcessor, RenewalCheckProcessor],
+  providers: [AnalysisProcessor, TrackerStallProcessor, RenewalCheckProcessor, ImplementationProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}
