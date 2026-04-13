@@ -82,6 +82,33 @@ enum SprintStatus {
   COMPLETED
 }
 
+enum ToolCategory {
+  AI_PLATFORM
+  AUTOMATION
+  ANALYTICS
+  CRM
+  COMMUNICATION
+  DEVELOPMENT
+  SECURITY
+  INDUSTRY_SPECIFIC
+  OTHER
+}
+
+enum ToolSource {
+  ONBOARDING
+  CONSULTATION
+  DISCOVERY
+  RECOMMENDATION
+  MANUAL
+}
+
+enum ToolStatus {
+  IDENTIFIED
+  EVALUATING
+  ACTIVE
+  DEPRECATED
+}
+
 // ─── Models ──────────────────────────────────────────────
 
 model Industry {
@@ -110,9 +137,11 @@ model Organization {
   sessions    ConsultationSession[]
   onboarding  Onboarding?
   departments Department[]
-  reports     TransformationReport[]
-  trackerActions TransformationAction[]
-  sprints        Sprint[]
+  reports          TransformationReport[]
+  trackerActions   TransformationAction[]
+  sprints          Sprint[]
+  discoveryReports DiscoveryReport[]
+  toolEntries      ToolEntry[]
 
   @@index([industryId])
   @@map("organizations")
@@ -520,4 +549,64 @@ model ActionComment {
 
   @@index([actionId])
   @@map("action_comments")
+}
+
+// ─── AI Discovery (Module 1) ───────────────────────────
+
+model DiscoveryReport {
+  id             String       @id @default(uuid())
+  url            String
+  domain         String
+  email          String?
+  organizationId String?      @map("organization_id")
+
+  // Results
+  score          Int?
+  maturityLevel  String?      @map("maturity_level")
+  industry       String?
+  companySize    String?      @map("company_size")
+  techStack      Json?        @map("tech_stack")
+  aiSignals      Json?        @map("ai_signals")
+  summary        String?      @db.Text
+  recommendations Json?
+
+  // Metadata
+  status         ReportStatus @default(GENERATING)
+  scrapedData    Json?        @map("scraped_data")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([domain])
+  @@index([organizationId])
+  @@map("discovery_reports")
+}
+
+// ─── AI Stack Intelligence (Module 6) ──────────────────
+
+model ToolEntry {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+
+  name           String
+  category       ToolCategory @default(OTHER)
+  source         ToolSource   @default(MANUAL)
+  sourceId       String?      @map("source_id")
+
+  status         ToolStatus   @default(IDENTIFIED)
+  departmentIds  Json?        @map("department_ids")
+  monthlyCost    Float?       @map("monthly_cost")
+  userCount      Int?         @map("user_count")
+  rating         Int?
+  notes          String?      @db.Text
+
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@index([organizationId, category])
+  @@map("tool_entries")
 }

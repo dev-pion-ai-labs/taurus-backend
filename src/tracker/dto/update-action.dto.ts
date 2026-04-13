@@ -32,6 +32,11 @@ export class UpdateActionDto {
   @IsString()
   category?: string;
 
+  @ApiPropertyOptional({ enum: ['BACKLOG', 'THIS_SPRINT', 'IN_PROGRESS', 'AWAITING_APPROVAL', 'DEPLOYED', 'VERIFIED'] })
+  @IsOptional()
+  @IsEnum(['BACKLOG', 'THIS_SPRINT', 'IN_PROGRESS', 'AWAITING_APPROVAL', 'DEPLOYED', 'VERIFIED'])
+  status?: string;
+
   @ApiPropertyOptional({ enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] })
   @IsOptional()
   @IsEnum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'])

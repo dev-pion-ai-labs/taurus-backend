@@ -6,7 +6,9 @@
       "Bash(npm install:*)",
       "Bash(git init:*)",
       "Bash(npm run:*)",
-      "Bash(xargs wc:*)"
+      "Bash(xargs wc:*)",
+      "Bash(node -e ':*)",
+      "Bash(DATABASE_URL=\"postgresql://postgres:BQLDodLghNHslfLqWfgKSwxYEngIeVxo@mainline.proxy.rlwy.net:29695/railway\" npx prisma migrate deploy)"
     ]
   }
 }

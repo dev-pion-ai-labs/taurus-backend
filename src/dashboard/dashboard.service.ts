@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma';
 
 @Injectable()
 export class DashboardService {
+  private readonly logger = new Logger(DashboardService.name);
+
   constructor(private prisma: PrismaService) {}
 
   async getExecutiveDashboard(organizationId: string) {
@@ -132,6 +134,225 @@ export class DashboardService {
         blockedActions,
         totalActions: trackerActions.length,
       },
+    };
+  }
+
+  async getMaturityTrend(organizationId: string) {
+    const reports = await this.prisma.transformationReport.findMany({
+      where: { organizationId, status: 'COMPLETED' },
+      orderBy: { generatedAt: 'asc' },
+      select: {
+        id: true,
+        overallScore: true,
+        maturityLevel: true,
+        generatedAt: true,
+      },
+    });
+
+    return reports.map((r, i) => ({
+      date: r.generatedAt?.toISOString(),
+      score: r.overallScore,
+      maturityLevel: r.maturityLevel,
+      change: i > 0 ? (r.overallScore ?? 0) - (reports[i - 1].overallScore ?? 0) : 0,
+    }));
+  }
+
+  async getDepartmentHeatmap(organizationId: string) {
+    const latestReport = await this.prisma.transformationReport.findFirst({
+      where: { organizationId, status: 'COMPLETED' },
+      orderBy: { generatedAt: 'desc' },
+    });
+
+    if (!latestReport?.departmentScores) return [];
+
+    const scores = latestReport.departmentScores as any[];
+    const avgScore =
+      scores.reduce((sum, d) => sum + (d.score || 0), 0) / (scores.length || 1);
+
+    return scores.map((dept) => ({
+      department: dept.department,
+      score: dept.score,
+      maturityLevel: dept.maturityLevel,
+      efficiencyValue: dept.efficiencyValue || 0,
+      growthValue: dept.growthValue || 0,
+      status:
+        dept.score >= avgScore + 10
+          ? 'LEADING'
+          : dept.score <= avgScore - 10
+            ? 'LAGGING'
+            : 'ON_TRACK',
+    }));
+  }
+
+  async getRoadmapProgress(organizationId: string) {
+    const actions = await this.prisma.transformationAction.findMany({
+      where: { organizationId },
+      select: {
+        status: true,
+        estimatedValue: true,
+        actualValue: true,
+        priority: true,
+        department: true,
+      },
+    });
+
+    const byStatus: Record<string, { count: number; value: number }> = {};
+    const byDepartment: Record<string, { total: number; completed: number }> = {};
+
+    for (const action of actions) {
+      // By status
+      if (!byStatus[action.status]) {
+        byStatus[action.status] = { count: 0, value: 0 };
+      }
+      byStatus[action.status].count++;
+      byStatus[action.status].value += action.estimatedValue || 0;
+
+      // By department
+      const dept = action.department || 'General';
+      if (!byDepartment[dept]) {
+        byDepartment[dept] = { total: 0, completed: 0 };
+      }
+      byDepartment[dept].total++;
+      if (action.status === 'DEPLOYED' || action.status === 'VERIFIED') {
+        byDepartment[dept].completed++;
+      }
+    }
+
+    const totalActions = actions.length;
+    const completedActions = actions.filter(
+      (a) => a.status === 'DEPLOYED' || a.status === 'VERIFIED',
+    ).length;
+
+    return {
+      totalActions,
+      completedActions,
+      completionRate: totalActions > 0 ? Math.round((completedActions / totalActions) * 100) : 0,
+      byStatus,
+      byDepartment,
+    };
+  }
+
+  async getValueRealization(organizationId: string) {
+    const actions = await this.prisma.transformationAction.findMany({
+      where: { organizationId },
+      select: {
+        status: true,
+        estimatedValue: true,
+        actualValue: true,
+        department: true,
+        deployedAt: true,
+      },
+    });
+
+    let totalEstimated = 0;
+    let totalRealized = 0;
+    const timeline: { date: string; cumulative: number }[] = [];
+
+    const deployed = actions
+      .filter((a) => a.deployedAt && (a.status === 'DEPLOYED' || a.status === 'VERIFIED'))
+      .sort((a, b) => a.deployedAt!.getTime() - b.deployedAt!.getTime());
+
+    let cumulative = 0;
+    for (const action of deployed) {
+      const value = action.actualValue || action.estimatedValue || 0;
+      cumulative += value;
+      timeline.push({
+        date: action.deployedAt!.toISOString(),
+        cumulative,
+      });
+    }
+
+    for (const action of actions) {
+      totalEstimated += action.estimatedValue || 0;
+      if (action.status === 'DEPLOYED' || action.status === 'VERIFIED') {
+        totalRealized += action.actualValue || action.estimatedValue || 0;
+      }
+    }
+
+    return {
+      totalEstimated,
+      totalRealized,
+      realizationRate:
+        totalEstimated > 0
+          ? Math.round((totalRealized / totalEstimated) * 100)
+          : 0,
+      timeline,
+    };
+  }
+
+  async getSprintVelocity(organizationId: string) {
+    const sprints = await this.prisma.sprint.findMany({
+      where: { organizationId, status: 'COMPLETED' },
+      orderBy: { endDate: 'asc' },
+      include: {
+        actions: {
+          select: { status: true, estimatedValue: true },
+        },
+      },
+    });
+
+    const velocity = sprints.map((sprint) => {
+      const completed = sprint.actions.filter(
+        (a) => a.status === 'DEPLOYED' || a.status === 'VERIFIED',
+      );
+      return {
+        sprint: sprint.name,
+        number: sprint.number,
+        startDate: sprint.startDate.toISOString(),
+        endDate: sprint.endDate.toISOString(),
+        totalActions: sprint.actions.length,
+        completedActions: completed.length,
+        valueDelivered: completed.reduce(
+          (sum, a) => sum + (a.estimatedValue || 0),
+          0,
+        ),
+      };
+    });
+
+    const avgVelocity =
+      velocity.length > 0
+        ? velocity.reduce((sum, v) => sum + v.completedActions, 0) /
+          velocity.length
+        : 0;
+
+    return {
+      sprints: velocity,
+      averageVelocity: Math.round(avgVelocity * 10) / 10,
+      trend:
+        velocity.length >= 2
+          ? velocity[velocity.length - 1].completedActions >
+            velocity[velocity.length - 2].completedActions
+            ? 'IMPROVING'
+            : velocity[velocity.length - 1].completedActions <
+                velocity[velocity.length - 2].completedActions
+              ? 'DECLINING'
+              : 'STABLE'
+          : 'INSUFFICIENT_DATA',
+    };
+  }
+
+  async getStackOverview(organizationId: string) {
+    const tools = await this.prisma.toolEntry.findMany({
+      where: { organizationId },
+    });
+
+    const totalSpend = tools.reduce((sum, t) => sum + (t.monthlyCost || 0), 0);
+
+    const byCategory: Record<string, number> = {};
+    const byStatus: Record<string, number> = {};
+
+    for (const tool of tools) {
+      byCategory[tool.category] = (byCategory[tool.category] || 0) + 1;
+      byStatus[tool.status] = (byStatus[tool.status] || 0) + 1;
+    }
+
+    return {
+      totalTools: tools.length,
+      monthlySpend: totalSpend,
+      annualSpend: totalSpend * 12,
+      byCategory,
+      byStatus,
+      activeTools: byStatus['ACTIVE'] || 0,
     };
   }
 }

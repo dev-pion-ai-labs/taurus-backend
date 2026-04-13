@@ -116,6 +116,7 @@ export class TrackerService {
       where: { id: actionId },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
+        ...(dto.status !== undefined && { status: dto.status as any }),
         ...(dto.description !== undefined && { description: dto.description }),
         ...(dto.department !== undefined && { department: dto.department }),
         ...(dto.category !== undefined && { category: dto.category }),

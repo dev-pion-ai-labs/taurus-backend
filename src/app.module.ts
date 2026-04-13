@@ -16,6 +16,9 @@ import { DashboardModule } from './dashboard';
 import { TrackerModule } from './tracker/tracker.module';
 import { StorageModule } from './storage';
 import { HealthModule } from './health/health.module';
+import { NotificationsModule } from './notifications';
+import { DiscoveryModule } from './discovery';
+import { StackModule } from './stack';
 
 @Module({
   imports: [
@@ -34,6 +37,7 @@ import { HealthModule } from './health/health.module';
     PrismaModule,
     RedisModule,
     QueueModule,
+    NotificationsModule,
     UsersModule,
     AuthModule,
     OrganizationsModule,
@@ -43,6 +47,8 @@ import { HealthModule } from './health/health.module';
     DepartmentsModule,
     DashboardModule,
     TrackerModule,
+    DiscoveryModule,
+    StackModule,
     HealthModule,
   ],
   providers: [

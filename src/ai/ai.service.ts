@@ -12,6 +12,11 @@ import {
   type AdaptiveQuestionContext,
   type GeneratedAdaptiveQuestion,
 } from './prompts/adaptive-question.prompt';
+import {
+  buildDiscoveryScanPrompt,
+  type DiscoveryScanContext,
+  type DiscoveryScanResult,
+} from './prompts/discovery-scan.prompt';
 
 export interface GeneratedQuestion {
   questionText: string;
@@ -265,6 +270,44 @@ Return a JSON object with this exact structure:
     }
 
     throw new Error(`Failed to generate ${label} questions after retries`);
+  }
+
+  async analyzeDiscoveryScan(
+    ctx: DiscoveryScanContext,
+  ): Promise<DiscoveryScanResult> {
+    const { system, user } = buildDiscoveryScanPrompt(ctx);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 4096,
+          system,
+          messages: [{ role: 'user', content: user }],
+        });
+
+        const raw =
+          response.content[0].type === 'text' ? response.content[0].text : '';
+        const text = raw
+          .replace(/```json?\s*\n?/gi, '')
+          .replace(/```\s*/gi, '')
+          .trim();
+        const result: DiscoveryScanResult = JSON.parse(text);
+
+        if (typeof result.score !== 'number' || !result.maturityLevel) {
+          throw new Error('Discovery scan result missing required fields');
+        }
+
+        return result;
+      } catch (error) {
+        this.logger.warn(
+          `Discovery scan attempt ${attempt + 1} failed: ${(error as Error).message}`,
+        );
+        if (attempt === 2) throw error;
+      }
+    }
+
+    throw new Error('Failed to analyze discovery scan after retries');
   }
 
   getModel(): string {
