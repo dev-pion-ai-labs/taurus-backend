@@ -17,6 +17,16 @@ import {
   type DiscoveryScanContext,
   type DiscoveryScanResult,
 } from './prompts/discovery-scan.prompt';
+import {
+  buildSprintSuggestionPrompt,
+  type SprintSuggestionContext,
+  type SprintSuggestion,
+} from './prompts/sprint-suggestion.prompt';
+import {
+  buildToolOverlapPrompt,
+  type ToolOverlapContext,
+  type ToolOverlapResult,
+} from './prompts/tool-overlap.prompt';
 
 export interface GeneratedQuestion {
   questionText: string;
@@ -308,6 +318,86 @@ Return a JSON object with this exact structure:
     }
 
     throw new Error('Failed to analyze discovery scan after retries');
+  }
+
+  async suggestSprint(
+    ctx: SprintSuggestionContext,
+  ): Promise<SprintSuggestion> {
+    const { system, user } = buildSprintSuggestionPrompt(ctx);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 4096,
+          system,
+          messages: [{ role: 'user', content: user }],
+        });
+
+        const raw =
+          response.content[0].type === 'text' ? response.content[0].text : '';
+        const text = raw
+          .replace(/```json?\s*\n?/gi, '')
+          .replace(/```\s*/gi, '')
+          .trim();
+        const suggestion: SprintSuggestion = JSON.parse(text);
+
+        if (
+          !suggestion.name ||
+          !Array.isArray(suggestion.suggestedActions) ||
+          suggestion.suggestedActions.length === 0
+        ) {
+          throw new Error('Sprint suggestion missing required fields');
+        }
+
+        return suggestion;
+      } catch (error) {
+        this.logger.warn(
+          `Sprint suggestion attempt ${attempt + 1} failed: ${(error as Error).message}`,
+        );
+        if (attempt === 2) throw error;
+      }
+    }
+
+    throw new Error('Failed to generate sprint suggestion after retries');
+  }
+
+  async detectOverlaps(
+    ctx: ToolOverlapContext,
+  ): Promise<ToolOverlapResult> {
+    const { system, user } = buildToolOverlapPrompt(ctx);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 4096,
+          system,
+          messages: [{ role: 'user', content: user }],
+        });
+
+        const raw =
+          response.content[0].type === 'text' ? response.content[0].text : '';
+        const text = raw
+          .replace(/```json?\s*\n?/gi, '')
+          .replace(/```\s*/gi, '')
+          .trim();
+        const result: ToolOverlapResult = JSON.parse(text);
+
+        if (!Array.isArray(result.overlaps) || !result.summary) {
+          throw new Error('Overlap detection result missing required fields');
+        }
+
+        return result;
+      } catch (error) {
+        this.logger.warn(
+          `Overlap detection attempt ${attempt + 1} failed: ${(error as Error).message}`,
+        );
+        if (attempt === 2) throw error;
+      }
+    }
+
+    throw new Error('Failed to detect overlaps after retries');
   }
 
   getModel(): string {

@@ -13,6 +13,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { StackService } from './stack.service';
 import { CreateToolDto } from './dto/create-tool.dto';
 import { UpdateToolDto } from './dto/update-tool.dto';
+import { CreateSpendDto } from './dto/create-spend.dto';
 
 @Controller('organizations/:orgId/stack')
 @UseGuards(AuthGuard('jwt'))
@@ -71,5 +72,47 @@ export class StackController {
   @Post('sync')
   async syncAll(@Param('orgId') orgId: string) {
     return this.stackService.syncAll(orgId);
+  }
+
+  // ── Spend Tracking ─────────────────────────────────────
+
+  @Post('spend')
+  async addSpend(
+    @Param('orgId') orgId: string,
+    @Body() dto: CreateSpendDto,
+  ) {
+    return this.stackService.addSpendRecord(orgId, dto);
+  }
+
+  @Get('spend')
+  async getSpendTrends(
+    @Param('orgId') orgId: string,
+    @Query('months') months?: string,
+  ) {
+    return this.stackService.getSpendTrends(
+      orgId,
+      months ? parseInt(months, 10) : 12,
+    );
+  }
+
+  // ── ROI ────────────────────────────────────────────────
+
+  @Get('roi')
+  async getROI(@Param('orgId') orgId: string) {
+    return this.stackService.getToolROI(orgId);
+  }
+
+  // ── Overlap Detection ──────────────────────────────────
+
+  @Get('overlaps')
+  async getOverlaps(@Param('orgId') orgId: string) {
+    return this.stackService.detectOverlaps(orgId);
+  }
+
+  // ── Renewals ───────────────────────────────────────────
+
+  @Get('renewals')
+  async getRenewals(@Param('orgId') orgId: string) {
+    return this.stackService.getUpcomingRenewals(orgId);
   }
 }

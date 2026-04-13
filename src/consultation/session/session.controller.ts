@@ -6,6 +6,7 @@ import {
   Body,
   Param,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -13,6 +14,7 @@ import { SessionService } from './session.service';
 import { ReportService } from './report.service';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import { JwtAuthGuard, CurrentUser, PaginationQueryDto } from '../../common';
+import type { Response } from 'express';
 
 @ApiTags('Consultation Sessions')
 @ApiBearerAuth()
@@ -81,5 +83,25 @@ export class SessionController {
       user.id,
       user.organizationId,
     );
+  }
+
+  @Get(':id/report/export')
+  async exportReportPdf(
+    @Param('id') sessionId: string,
+    @CurrentUser('organizationId') orgId: string,
+    @Res() res: Response,
+  ) {
+    const pdfBuffer = await this.reportService.exportReportPdf(
+      sessionId,
+      orgId,
+    );
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="taurus-report-${dateStr}.pdf"`,
+      'Content-Length': pdfBuffer.length,
+    });
+    res.end(pdfBuffer);
   }
 }

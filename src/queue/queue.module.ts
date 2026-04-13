@@ -4,6 +4,8 @@ import { ConfigService } from '@nestjs/config';
 import { AiModule } from '../ai';
 import { OnboardingModule } from '../onboarding';
 import { AnalysisProcessor } from './analysis.processor';
+import { TrackerStallProcessor } from './tracker-stall.processor';
+import { RenewalCheckProcessor } from './renewal-check.processor';
 
 @Module({
   imports: [
@@ -54,9 +56,27 @@ import { AnalysisProcessor } from './analysis.processor';
           removeOnFail: 50,
         },
       },
+      {
+        name: 'tracker-alerts',
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          removeOnComplete: 100,
+          removeOnFail: 50,
+        },
+      },
+      {
+        name: 'renewal-alerts',
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          removeOnComplete: 100,
+          removeOnFail: 50,
+        },
+      },
     ),
   ],
-  providers: [AnalysisProcessor],
+  providers: [AnalysisProcessor, TrackerStallProcessor, RenewalCheckProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}

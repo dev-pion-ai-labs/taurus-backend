@@ -142,6 +142,7 @@ model Organization {
   sprints          Sprint[]
   discoveryReports DiscoveryReport[]
   toolEntries      ToolEntry[]
+  toolSpendRecords ToolSpendRecord[]
 
   @@index([industryId])
   @@map("organizations")
@@ -599,14 +600,36 @@ model ToolEntry {
   monthlyCost    Float?       @map("monthly_cost")
   userCount      Int?         @map("user_count")
   rating         Int?
-  notes          String?      @db.Text
+  notes              String?      @db.Text
+  utilizationPercent Int?         @map("utilization_percent")
+  contractStartDate  DateTime?    @map("contract_start_date")
+  contractEndDate    DateTime?    @map("contract_end_date")
+  renewalAlertDays   Int?         @default(30) @map("renewal_alert_days")
 
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
 
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  spendRecords   ToolSpendRecord[]
 
   @@unique([organizationId, name])
   @@index([organizationId, category])
   @@map("tool_entries")
+}
+
+model ToolSpendRecord {
+  id             String       @id @default(uuid())
+  toolEntryId    String       @map("tool_entry_id")
+  organizationId String       @map("organization_id")
+  month          DateTime
+  amount         Float
+  notes          String?
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  toolEntry      ToolEntry    @relation(fields: [toolEntryId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([toolEntryId, month])
+  @@index([organizationId, month])
+  @@map("tool_spend_records")
 }

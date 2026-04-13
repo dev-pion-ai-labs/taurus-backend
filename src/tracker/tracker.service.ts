@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
   ConflictException,
@@ -15,10 +16,16 @@ import {
   BoardQueryDto,
 } from './dto';
 import { ActionStatus, Prisma } from '@prisma/client';
+import { AiService } from '../ai';
 
 @Injectable()
 export class TrackerService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(TrackerService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private aiService: AiService,
+  ) {}
 
   // ── Board ───────────────────────────────────────────────
 
@@ -140,7 +147,7 @@ export class TrackerService {
     organizationId: string,
     dto: MoveActionDto,
   ) {
-    await this.findActionOrFail(actionId, organizationId);
+    const action = await this.findActionOrFail(actionId, organizationId);
 
     const now = new Date();
     const timestamps: Prisma.TransformationActionUpdateInput = {};
@@ -150,7 +157,7 @@ export class TrackerService {
     if (dto.status === 'DEPLOYED') timestamps.deployedAt = now;
     if (dto.status === 'VERIFIED') timestamps.verifiedAt = now;
 
-    return this.prisma.transformationAction.update({
+    const updated = await this.prisma.transformationAction.update({
       where: { id: actionId },
       data: {
         status: dto.status as ActionStatus,
@@ -161,6 +168,33 @@ export class TrackerService {
         assignee: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
     });
+
+    // Auto-advance sprint when all actions are DEPLOYED or VERIFIED
+    if (
+      (dto.status === 'DEPLOYED' || dto.status === 'VERIFIED') &&
+      action.sprintId
+    ) {
+      const sprintActions = await this.prisma.transformationAction.findMany({
+        where: { sprintId: action.sprintId },
+        select: { status: true },
+      });
+
+      const allDone = sprintActions.every(
+        (a) => a.status === 'DEPLOYED' || a.status === 'VERIFIED',
+      );
+
+      if (allDone) {
+        await this.prisma.sprint.update({
+          where: { id: action.sprintId },
+          data: { status: 'COMPLETED' },
+        });
+        this.logger.log(
+          `Sprint ${action.sprintId} auto-completed — all actions deployed/verified`,
+        );
+      }
+    }
+
+    return updated;
   }
 
   async deleteAction(actionId: string, organizationId: string) {
@@ -364,6 +398,90 @@ export class TrackerService {
       activeActions: byStatus.IN_PROGRESS,
       completedActions: byStatus.DEPLOYED + byStatus.VERIFIED,
     };
+  }
+
+  // ── Stalled Actions ─────────────────────────────────────
+
+  async getStalledActions(organizationId: string) {
+    const fiveDaysAgo = new Date();
+    fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+
+    return this.prisma.transformationAction.findMany({
+      where: {
+        organizationId,
+        status: { in: ['IN_PROGRESS', 'AWAITING_APPROVAL'] },
+        updatedAt: { lt: fiveDaysAgo },
+      },
+      include: {
+        assignee: { select: { id: true, firstName: true, lastName: true, email: true } },
+        sprint: { select: { id: true, name: true } },
+      },
+      orderBy: { updatedAt: 'asc' },
+    });
+  }
+
+  // ── AI Sprint Suggestion ───────────────────────────────
+
+  async suggestSprint(organizationId: string) {
+    const [backlogActions, completedSprints, org] = await Promise.all([
+      this.prisma.transformationAction.findMany({
+        where: { organizationId, status: 'BACKLOG' },
+        select: {
+          id: true,
+          title: true,
+          department: true,
+          priority: true,
+          estimatedValue: true,
+          estimatedEffort: true,
+          phase: true,
+        },
+      }),
+      this.prisma.sprint.findMany({
+        where: { organizationId, status: 'COMPLETED' },
+        include: {
+          actions: { select: { status: true } },
+        },
+      }),
+      this.prisma.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        include: { industry: true },
+      }),
+    ]);
+
+    if (backlogActions.length === 0) {
+      return { message: 'No backlog actions available for sprint planning' };
+    }
+
+    const totalSprints = completedSprints.length;
+    const avgVelocity =
+      totalSprints > 0
+        ? completedSprints.reduce(
+            (sum, s) =>
+              sum +
+              s.actions.filter(
+                (a) => a.status === 'DEPLOYED' || a.status === 'VERIFIED',
+              ).length,
+            0,
+          ) / totalSprints
+        : 6;
+
+    return this.aiService.suggestSprint({
+      backlogActions: backlogActions.map((a) => ({
+        id: a.id,
+        title: a.title,
+        department: a.department,
+        priority: a.priority,
+        estimatedValue: a.estimatedValue,
+        estimatedEffort: a.estimatedEffort,
+        phase: a.phase,
+      })),
+      currentSprintCount: await this.prisma.sprint.count({
+        where: { organizationId },
+      }),
+      averageVelocity: Math.round(avgVelocity * 10) / 10,
+      orgName: org.name,
+      industry: org.industry.name,
+    });
   }
 
   // ── Helpers ─────────────────────────────────────────────

@@ -7,13 +7,18 @@ import {
 import { PrismaService } from '../prisma';
 import { CreateToolDto } from './dto/create-tool.dto';
 import { UpdateToolDto } from './dto/update-tool.dto';
+import { CreateSpendDto } from './dto/create-spend.dto';
 import { Prisma } from '@prisma/client';
+import { AiService } from '../ai';
 
 @Injectable()
 export class StackService {
   private readonly logger = new Logger(StackService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private aiService: AiService,
+  ) {}
 
   async getInventory(
     organizationId: string,
@@ -88,6 +93,22 @@ export class StackService {
         ...(dto.userCount !== undefined && { userCount: dto.userCount }),
         ...(dto.rating !== undefined && { rating: dto.rating }),
         ...(dto.notes !== undefined && { notes: dto.notes }),
+        ...(dto.utilizationPercent !== undefined && {
+          utilizationPercent: dto.utilizationPercent,
+        }),
+        ...(dto.contractStartDate !== undefined && {
+          contractStartDate: dto.contractStartDate
+            ? new Date(dto.contractStartDate)
+            : null,
+        }),
+        ...(dto.contractEndDate !== undefined && {
+          contractEndDate: dto.contractEndDate
+            ? new Date(dto.contractEndDate)
+            : null,
+        }),
+        ...(dto.renewalAlertDays !== undefined && {
+          renewalAlertDays: dto.renewalAlertDays,
+        }),
       },
     });
   }
@@ -120,12 +141,26 @@ export class StackService {
       byStatus[tool.status] = (byStatus[tool.status] || 0) + 1;
     }
 
+    const toolsWithUtilization = tools.filter(
+      (t) => t.utilizationPercent != null,
+    );
+    const avgUtilization =
+      toolsWithUtilization.length > 0
+        ? Math.round(
+            toolsWithUtilization.reduce(
+              (sum, t) => sum + t.utilizationPercent!,
+              0,
+            ) / toolsWithUtilization.length,
+          )
+        : null;
+
     return {
       totalTools: tools.length,
       monthlySpend: totalSpend,
       annualSpend: totalSpend * 12,
       byCategory,
       byStatus,
+      avgUtilization,
     };
   }
 
@@ -343,6 +378,201 @@ export class StackService {
         reportResult.synced +
         discoveryResult.synced,
     };
+  }
+
+  // ── Spend Tracking ──────────────────────────────────────
+
+  async addSpendRecord(organizationId: string, dto: CreateSpendDto) {
+    // Verify tool belongs to org
+    const tool = await this.prisma.toolEntry.findFirst({
+      where: { id: dto.toolEntryId, organizationId },
+    });
+    if (!tool) throw new NotFoundException('Tool not found');
+
+    return this.prisma.toolSpendRecord.upsert({
+      where: {
+        toolEntryId_month: {
+          toolEntryId: dto.toolEntryId,
+          month: new Date(dto.month),
+        },
+      },
+      create: {
+        toolEntryId: dto.toolEntryId,
+        organizationId,
+        month: new Date(dto.month),
+        amount: dto.amount,
+        notes: dto.notes,
+      },
+      update: {
+        amount: dto.amount,
+        notes: dto.notes,
+      },
+    });
+  }
+
+  async getSpendTrends(organizationId: string, months: number = 12) {
+    const since = new Date();
+    since.setMonth(since.getMonth() - months);
+
+    const records = await this.prisma.toolSpendRecord.findMany({
+      where: {
+        organizationId,
+        month: { gte: since },
+      },
+      include: {
+        toolEntry: { select: { name: true, category: true } },
+      },
+      orderBy: { month: 'asc' },
+    });
+
+    // Group by month
+    const monthlyMap = new Map<
+      string,
+      { total: number; byTool: { name: string; amount: number }[] }
+    >();
+
+    for (const record of records) {
+      const monthKey = record.month.toISOString().slice(0, 7); // YYYY-MM
+      if (!monthlyMap.has(monthKey)) {
+        monthlyMap.set(monthKey, { total: 0, byTool: [] });
+      }
+      const entry = monthlyMap.get(monthKey)!;
+      entry.total += record.amount;
+      entry.byTool.push({ name: record.toolEntry.name, amount: record.amount });
+    }
+
+    const monthly = Array.from(monthlyMap.entries()).map(([month, data]) => ({
+      month,
+      total: data.total,
+      byTool: data.byTool,
+    }));
+
+    // Determine trend
+    let trend: 'UP' | 'DOWN' | 'STABLE' = 'STABLE';
+    if (monthly.length >= 2) {
+      const recent = monthly[monthly.length - 1].total;
+      const previous = monthly[monthly.length - 2].total;
+      if (recent > previous * 1.05) trend = 'UP';
+      else if (recent < previous * 0.95) trend = 'DOWN';
+    }
+
+    return { monthly, trend };
+  }
+
+  // ── ROI Calculator ─────────────────────────────────────
+
+  async getToolROI(organizationId: string) {
+    const tools = await this.prisma.toolEntry.findMany({
+      where: { organizationId, status: 'ACTIVE' },
+    });
+
+    const actions = await this.prisma.transformationAction.findMany({
+      where: {
+        organizationId,
+        status: { in: ['DEPLOYED', 'VERIFIED'] },
+      },
+      select: { title: true, description: true, estimatedValue: true },
+    });
+
+    const toolResults = tools.map((tool) => {
+      const monthlyCost = tool.monthlyCost || 0;
+      const annualCost = monthlyCost * 12;
+
+      // Cross-reference with deployed actions that mention the tool
+      const relatedActions = actions.filter((a) => {
+        const searchText = `${a.title} ${a.description || ''}`.toLowerCase();
+        return searchText.includes(tool.name.toLowerCase());
+      });
+
+      const estimatedValue = relatedActions.reduce(
+        (sum, a) => sum + (a.estimatedValue || 0),
+        0,
+      );
+
+      const roi =
+        monthlyCost > 0
+          ? Math.round(((estimatedValue - annualCost) / annualCost) * 100)
+          : null;
+
+      let roiStatus: 'POSITIVE' | 'NEGATIVE' | 'UNKNOWN' = 'UNKNOWN';
+      if (roi !== null) {
+        roiStatus = roi >= 0 ? 'POSITIVE' : 'NEGATIVE';
+      }
+
+      return {
+        name: tool.name,
+        monthlyCost,
+        annualCost,
+        estimatedValue,
+        roi,
+        roiStatus,
+      };
+    });
+
+    return {
+      tools: toolResults,
+      totalAnnualCost: toolResults.reduce((sum, t) => sum + t.annualCost, 0),
+      totalEstimatedValue: toolResults.reduce(
+        (sum, t) => sum + t.estimatedValue,
+        0,
+      ),
+    };
+  }
+
+  // ── Overlap Detection ──────────────────────────────────
+
+  async detectOverlaps(organizationId: string) {
+    const [tools, org] = await Promise.all([
+      this.prisma.toolEntry.findMany({
+        where: { organizationId },
+        select: {
+          name: true,
+          category: true,
+          notes: true,
+          monthlyCost: true,
+        },
+      }),
+      this.prisma.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        include: { industry: true },
+      }),
+    ]);
+
+    if (tools.length < 2) {
+      return {
+        overlaps: [],
+        summary: 'Not enough tools in inventory to detect overlaps.',
+      };
+    }
+
+    return this.aiService.detectOverlaps({
+      tools: tools.map((t) => ({
+        name: t.name,
+        category: t.category,
+        notes: t.notes,
+        monthlyCost: t.monthlyCost,
+      })),
+      industry: org.industry.name,
+    });
+  }
+
+  // ── Renewal Intelligence ───────────────────────────────
+
+  async getUpcomingRenewals(organizationId: string) {
+    const now = new Date();
+    const thirtyDaysFromNow = new Date();
+    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 90);
+
+    return this.prisma.toolEntry.findMany({
+      where: {
+        organizationId,
+        contractEndDate: {
+          gte: now,
+          lte: thirtyDaysFromNow,
+        },
+      },
+      orderBy: { contractEndDate: 'asc' },
+    });
   }
 
   private inferCategory(hint?: string): any {

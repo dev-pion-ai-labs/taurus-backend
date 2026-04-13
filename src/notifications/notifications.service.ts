@@ -4,6 +4,8 @@ import { Resend } from 'resend';
 import { reportReadyTemplate } from './templates/report-ready.template';
 import { sessionReminderTemplate } from './templates/session-reminder.template';
 import { discoverySummaryTemplate } from './templates/discovery-summary.template';
+import { stallAlertTemplate } from './templates/stall-alert.template';
+import { renewalAlertTemplate } from './templates/renewal-alert.template';
 
 @Injectable()
 export class NotificationsService {
@@ -113,6 +115,48 @@ export class NotificationsService {
     await this.sendEmail(
       params.email,
       `AI Readiness Snapshot for ${params.url}`,
+      html,
+    );
+  }
+
+  async sendStallAlert(params: {
+    email: string;
+    userName?: string;
+    actionTitle: string;
+    daysSinceUpdate: number;
+    trackerUrl: string;
+  }): Promise<void> {
+    const html = stallAlertTemplate({
+      userName: params.userName,
+      actionTitle: params.actionTitle,
+      daysSinceUpdate: params.daysSinceUpdate,
+      trackerUrl: params.trackerUrl,
+    });
+    await this.sendEmail(
+      params.email,
+      `Action Stalled: ${params.actionTitle}`,
+      html,
+    );
+  }
+
+  async sendRenewalAlert(params: {
+    email: string;
+    toolName: string;
+    renewalDate: string;
+    monthlyCost: number | null;
+    utilizationPercent: number | null;
+    orgName: string;
+  }): Promise<void> {
+    const html = renewalAlertTemplate({
+      toolName: params.toolName,
+      renewalDate: params.renewalDate,
+      monthlyCost: params.monthlyCost,
+      utilizationPercent: params.utilizationPercent,
+      orgName: params.orgName,
+    });
+    await this.sendEmail(
+      params.email,
+      `Contract Renewal Coming: ${params.toolName}`,
       html,
     );
   }

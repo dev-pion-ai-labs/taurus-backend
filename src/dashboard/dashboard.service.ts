@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma';
+import { boardReportTemplate } from './templates/board-report.template';
 
 @Injectable()
 export class DashboardService {
@@ -354,5 +355,166 @@ export class DashboardService {
       byStatus,
       activeTools: byStatus['ACTIVE'] || 0,
     };
+  }
+
+  // ── Team Readiness ─────────────────────────────────────
+
+  async getTeamReadiness(organizationId: string) {
+    const latestReport = await this.prisma.transformationReport.findFirst({
+      where: { organizationId, status: 'COMPLETED' },
+      orderBy: { generatedAt: 'desc' },
+    });
+
+    const memberCount = await this.prisma.user.count({
+      where: { organizationId },
+    });
+
+    const departmentScores = (latestReport?.departmentScores as any[]) || [];
+
+    const departments = departmentScores.map((dept) => {
+      let readinessStatus: 'READY' | 'DEVELOPING' | 'NOT_READY' = 'NOT_READY';
+      if (dept.score >= 60) readinessStatus = 'READY';
+      else if (dept.score >= 40) readinessStatus = 'DEVELOPING';
+
+      return {
+        name: dept.department,
+        score: dept.score,
+        maturityLevel: dept.maturityLevel,
+        readinessStatus,
+      };
+    });
+
+    const overallReadiness =
+      departments.length > 0
+        ? Math.round(
+            departments.reduce((sum, d) => sum + d.score, 0) /
+              departments.length,
+          )
+        : 0;
+
+    return {
+      departments,
+      overallReadiness,
+      memberCount,
+    };
+  }
+
+  // ── Risk Overview ──────────────────────────────────────
+
+  async getRiskOverview(organizationId: string) {
+    const fiveDaysAgo = new Date();
+    fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+
+    const thirtyDaysFromNow = new Date();
+    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+
+    const [blockedActions, stalledActions, untrackedSpendTools, upcomingRenewals] =
+      await Promise.all([
+        this.prisma.transformationAction.count({
+          where: {
+            organizationId,
+            blockerNote: { not: null },
+          },
+        }),
+        this.prisma.transformationAction.count({
+          where: {
+            organizationId,
+            status: 'IN_PROGRESS',
+            updatedAt: { lt: fiveDaysAgo },
+          },
+        }),
+        this.prisma.toolEntry.count({
+          where: {
+            organizationId,
+            status: 'ACTIVE',
+            monthlyCost: null,
+          },
+        }),
+        this.prisma.toolEntry.count({
+          where: {
+            organizationId,
+            contractEndDate: {
+              gte: new Date(),
+              lte: thirtyDaysFromNow,
+            },
+          },
+        }),
+      ]);
+
+    // Weighted risk score (0-100)
+    const riskScore = Math.min(
+      100,
+      blockedActions * 15 +
+        stalledActions * 10 +
+        untrackedSpendTools * 5 +
+        upcomingRenewals * 8,
+    );
+
+    return {
+      blockedActions,
+      stalledActions,
+      untrackedSpendTools,
+      upcomingRenewals,
+      riskScore,
+    };
+  }
+
+  // ── Board Report PDF ───────────────────────────────────
+
+  async generateBoardReport(organizationId: string): Promise<Buffer> {
+    const [executive, velocity, stackOverview, org] = await Promise.all([
+      this.getExecutiveDashboard(organizationId),
+      this.getSprintVelocity(organizationId),
+      this.getStackOverview(organizationId),
+      this.prisma.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+      }),
+    ]);
+
+    const html = boardReportTemplate({
+      companyName: org.name,
+      date: new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }),
+      currentScore: executive.currentScore,
+      previousScore: executive.previousScore,
+      maturityLevel: executive.maturityLevel,
+      valueRealized: executive.tracker.valueRealized,
+      valueIdentified: executive.tracker.valueIdentified,
+      departmentScores: executive.departmentScores.map((d) => ({
+        department: d.department,
+        score: d.score,
+        maturityLevel: d.status,
+      })),
+      topRecommendations: executive.topRecommendations.map((r) => ({
+        title: r.title,
+        department: r.department,
+        annualValue: r.annualValue,
+      })),
+      sprintVelocity: velocity,
+      stackOverview,
+    });
+
+    // Use puppeteer to generate PDF
+    const puppeteer = await import('puppeteer');
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      const pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' },
+      });
+      return Buffer.from(pdfBuffer);
+    } finally {
+      await browser.close();
+    }
   }
 }

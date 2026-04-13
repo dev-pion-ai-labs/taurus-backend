@@ -167,6 +167,26 @@ export class TrackerController {
     return this.trackerService.getStats(user.organizationId);
   }
 
+  // ── Alerts ─────────────────────────────────────────────
+
+  @Get('alerts')
+  getStalledActions(
+    @CurrentUser() user: { organizationId: string | null },
+  ) {
+    this.requireOrg(user.organizationId);
+    return this.trackerService.getStalledActions(user.organizationId);
+  }
+
+  // ── AI Sprint Suggestion ───────────────────────────────
+
+  @Post('sprints/suggest')
+  suggestSprint(
+    @CurrentUser() user: { organizationId: string | null },
+  ) {
+    this.requireOrg(user.organizationId);
+    return this.trackerService.suggestSprint(user.organizationId);
+  }
+
   // ── Helper ──────────────────────────────────────────────
 
   private requireOrg(orgId: string | null): asserts orgId is string {
