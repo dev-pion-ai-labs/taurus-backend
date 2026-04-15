@@ -3,6 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { ArtifactType } from '@prisma/client';
 import { IMPLEMENTATION_TOOLS } from './tools/implementation-tools';
+import { SLACK_TOOLS } from './tools/slack-tools';
+import { GITHUB_TOOLS } from './tools/github-tools';
+import { MAKE_TOOLS } from './tools/make-tools';
+import { NOTION_TOOLS } from './tools/notion-tools';
 import { ImplementationToolExecutor } from './tools/implementation-tool-executor';
 import {
   IMPLEMENTATION_PLAN_SYSTEM_PROMPT,
@@ -38,6 +42,7 @@ export interface ArtifactResult {
   content: string;
 }
 
+const ALL_TOOLS = [...IMPLEMENTATION_TOOLS, ...SLACK_TOOLS, ...GITHUB_TOOLS, ...MAKE_TOOLS, ...NOTION_TOOLS];
 const MAX_AGENT_TURNS = 10;
 
 @Injectable()
@@ -129,7 +134,7 @@ export class ImplementationAiService {
         model: this.model,
         max_tokens: 8192,
         system: IMPLEMENTATION_PLAN_SYSTEM_PROMPT,
-        tools: IMPLEMENTATION_TOOLS,
+        tools: ALL_TOOLS,
         messages,
       });
 

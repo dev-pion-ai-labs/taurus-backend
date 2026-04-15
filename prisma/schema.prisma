@@ -128,6 +128,56 @@ enum ArtifactType {
   CUSTOM
 }
 
+enum IntegrationProvider {
+  SLACK
+  GITHUB
+  ZAPIER
+  MAKE
+  N8N_CLOUD
+  NOTION
+  CUSTOM
+}
+
+enum AuthType {
+  OAUTH2
+  API_KEY
+  BEARER_TOKEN
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  EXPIRED
+  REVOKED
+  ERROR
+}
+
+enum AuditStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  ROLLED_BACK
+}
+
+enum DeploymentSessionStatus {
+  PREPARING
+  DRY_RUN
+  APPROVED
+  EXECUTING
+  COMPLETED
+  FAILED
+  ROLLED_BACK
+}
+
+enum DeploymentStepStatus {
+  PENDING
+  DRY_RUN
+  APPROVED
+  EXECUTING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
 // ─── Models ──────────────────────────────────────────────
 
 model Industry {
@@ -163,6 +213,9 @@ model Organization {
   toolEntries      ToolEntry[]
   toolSpendRecords ToolSpendRecord[]
   deploymentPlans  DeploymentPlan[]
+  integrations     OrgIntegration[]
+  deploymentAuditLogs DeploymentAuditLog[]
+  deploymentSessions  DeploymentSession[]
 
   @@index([industryId])
   @@map("organizations")
@@ -686,6 +739,7 @@ model DeploymentPlan {
   action         TransformationAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
   user           User                 @relation(fields: [userId], references: [id])
   artifacts      DeploymentArtifact[]
+  sessions       DeploymentSession[]
 
   @@index([organizationId])
   @@index([actionId])
@@ -707,4 +761,100 @@ model DeploymentArtifact {
 
   @@index([planId])
   @@map("deployment_artifacts")
+}
+
+// ─── Deployment Agent: Integrations (Module 5) ──────────
+
+model OrgIntegration {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  provider       IntegrationProvider
+  label          String?
+  authType       AuthType            @map("auth_type")
+  credentials    String              @db.Text // encrypted (aes-256-gcm)
+  scopes         String[]            @default([])
+  status         IntegrationStatus   @default(CONNECTED)
+  expiresAt      DateTime?           @map("expires_at")
+  lastUsedAt     DateTime?           @map("last_used_at")
+  metadata       Json?               // provider-specific (workspace ID, org name, etc.)
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  auditLogs      DeploymentAuditLog[]
+
+  @@unique([organizationId, provider, label])
+  @@index([organizationId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("org_integrations")
+}
+
+model DeploymentAuditLog {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  planId         String?             @map("plan_id")
+  integrationId  String              @map("integration_id")
+  action         String              // "create_channel", "create_zap", etc.
+  provider       IntegrationProvider
+  request        Json                // sanitized — no secrets
+  response       Json?
+  status         AuditStatus         @default(PENDING)
+  rollbackData   Json?               @map("rollback_data") // data needed to undo this action
+  executedBy     String              @map("executed_by") // userId who approved
+  executedAt     DateTime            @default(now()) @map("executed_at")
+  rolledBackAt   DateTime?           @map("rolled_back_at")
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  integration    OrgIntegration      @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([integrationId])
+  @@index([planId])
+  @@map("deployment_audit_logs")
+}
+
+// ─── Multi-Tool Orchestration (Phase 4) ─────────────────
+
+model DeploymentSession {
+  id             String                  @id @default(uuid())
+  organizationId String                  @map("organization_id")
+  planId         String                  @map("plan_id")
+  status         DeploymentSessionStatus @default(PREPARING)
+  startedAt      DateTime?               @map("started_at")
+  completedAt    DateTime?               @map("completed_at")
+  error          String?
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan           DeploymentPlan          @relation(fields: [planId], references: [id], onDelete: Cascade)
+  steps          DeploymentStep[]
+
+  @@index([organizationId])
+  @@index([planId])
+  @@map("deployment_sessions")
+}
+
+model DeploymentStep {
+  id             String                @id @default(uuid())
+  sessionId      String                @map("session_id")
+  integrationId  String?               @map("integration_id")
+  provider       IntegrationProvider
+  action         String                // "create_channel", "create_workflow", etc.
+  params         Json                  // action parameters
+  dependsOn      String[]              @default([]) @map("depends_on") // step IDs that must complete first
+  orderIndex     Int                   @map("order_index")
+  status         DeploymentStepStatus  @default(PENDING)
+  dryRunResult   Json?                 @map("dry_run_result")
+  result         Json?                 // execution result
+  error          String?
+  auditLogId     String?               @map("audit_log_id")
+  startedAt      DateTime?             @map("started_at")
+  completedAt    DateTime?             @map("completed_at")
+
+  session        DeploymentSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("deployment_steps")
 }

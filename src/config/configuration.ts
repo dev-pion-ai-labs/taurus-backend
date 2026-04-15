@@ -34,4 +34,17 @@ export default () => ({
   storage: {
     uploadDir: process.env.UPLOAD_DIR || './uploads',
   },
+  credential: {
+    encryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,
+  },
+  slack: {
+    clientId: process.env.SLACK_CLIENT_ID,
+    clientSecret: process.env.SLACK_CLIENT_SECRET,
+  },
+  github: {
+    appId: process.env.GITHUB_APP_ID,
+    privateKey: process.env.GITHUB_PRIVATE_KEY,
+    clientId: process.env.GITHUB_CLIENT_ID,
+    clientSecret: process.env.GITHUB_CLIENT_SECRET,
+  },
 });

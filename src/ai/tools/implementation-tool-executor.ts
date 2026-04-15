@@ -1,11 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import { SlackToolExecutor } from './slack-tool-executor';
+import { GitHubToolExecutor } from './github-tool-executor';
+import { MakeToolExecutor } from './make-tool-executor';
+import { NotionToolExecutor } from './notion-tool-executor';
 
 @Injectable()
 export class ImplementationToolExecutor {
   private readonly logger = new Logger(ImplementationToolExecutor.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private slackToolExecutor: SlackToolExecutor,
+    private githubToolExecutor: GitHubToolExecutor,
+    private makeToolExecutor: MakeToolExecutor,
+    private notionToolExecutor: NotionToolExecutor,
+  ) {}
 
   async executeTool(
     toolName: string,
@@ -13,6 +23,20 @@ export class ImplementationToolExecutor {
     organizationId: string,
   ): Promise<unknown> {
     this.logger.debug(`Executing tool: ${toolName} for org ${organizationId}`);
+
+    // Delegate to provider-specific executors
+    if (this.slackToolExecutor.canHandle(toolName)) {
+      return this.slackToolExecutor.executeTool(toolName, input, organizationId);
+    }
+    if (this.githubToolExecutor.canHandle(toolName)) {
+      return this.githubToolExecutor.executeTool(toolName, input, organizationId);
+    }
+    if (this.makeToolExecutor.canHandle(toolName)) {
+      return this.makeToolExecutor.executeTool(toolName, input, organizationId);
+    }
+    if (this.notionToolExecutor.canHandle(toolName)) {
+      return this.notionToolExecutor.executeTool(toolName, input, organizationId);
+    }
 
     switch (toolName) {
       case 'get_organization_context':
