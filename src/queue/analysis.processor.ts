@@ -4,6 +4,7 @@ import { Job } from 'bullmq';
 import { PrismaService } from '../prisma';
 import { AiService } from '../ai';
 import { WebsiteScraperService } from '../onboarding/website-scraper.service';
+import { NotificationsService } from '../notifications';
 import type { ReportGenerationContext } from '../ai/prompts/report-generation.prompt';
 
 interface ReportGenerationJob {
@@ -17,6 +18,13 @@ interface WebsiteScrapingJob {
   companyUrl: string;
 }
 
+interface DiscoveryScanJob {
+  reportId: string;
+  url: string;
+  email?: string;
+  industry?: string;
+}
+
 @Processor('analysis', { concurrency: 2 })
 export class AnalysisProcessor extends WorkerHost {
   private readonly logger = new Logger(AnalysisProcessor.name);
@@ -25,11 +33,12 @@ export class AnalysisProcessor extends WorkerHost {
     private prisma: PrismaService,
     private aiService: AiService,
     private websiteScraper: WebsiteScraperService,
+    private notifications: NotificationsService,
   ) {
     super();
   }
 
-  async process(job: Job<ReportGenerationJob | WebsiteScrapingJob>) {
+  async process(job: Job<ReportGenerationJob | WebsiteScrapingJob | DiscoveryScanJob>) {
     if (job.name === 'generate-report') {
       const { reportId, sessionId, organizationId } =
         job.data as ReportGenerationJob;
@@ -87,6 +96,30 @@ export class AnalysisProcessor extends WorkerHost {
         this.logger.log(
           `[${reportId}] Report saved in ${Date.now() - saveStart}ms. Total: ${((Date.now() - start) / 1000).toFixed(1)}s | Value: $${(totalEfficiencyValue + totalGrowthValue).toLocaleString()}`,
         );
+
+        // Send "report ready" notification
+        try {
+          const session = await this.prisma.consultationSession.findUnique({
+            where: { id: sessionId },
+            include: { user: true, organization: true },
+          });
+          if (session?.user?.email) {
+            await this.notifications.sendReportReady({
+              email: session.user.email,
+              userName: session.user.firstName ?? undefined,
+              orgName: session.organization.name,
+              reportId,
+              sessionId,
+              overallScore: reportData.overallScore,
+              maturityLevel: reportData.maturityLevel,
+              totalValue: totalEfficiencyValue + totalGrowthValue,
+            });
+          }
+        } catch (notifError) {
+          this.logger.warn(
+            `[${reportId}] Failed to send report-ready notification: ${(notifError as Error).message}`,
+          );
+        }
       } catch (error) {
         this.logger.error(
           `[${reportId}] Report generation failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${(error as Error).message}`,
@@ -145,6 +178,83 @@ export class AnalysisProcessor extends WorkerHost {
           `[${organizationId}] Website scraping failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${(error as Error).message}`,
           (error as Error).stack,
         );
+        throw error;
+      }
+    } else if (job.name === 'discovery-scan') {
+      const { reportId, url, email, industry } =
+        job.data as DiscoveryScanJob;
+      const start = Date.now();
+      this.logger.log(
+        `[${reportId}] Starting discovery scan for ${url}`,
+      );
+
+      try {
+        // Scrape the website
+        const scrapedData = await this.websiteScraper.scrapeWebsite(url);
+
+        if (scrapedData.error && !scrapedData.title) {
+          throw new Error(`Scraping failed: ${scrapedData.error}`);
+        }
+
+        // Run AI analysis on scraped data
+        const analysisResult = await this.aiService.analyzeDiscoveryScan({
+          url,
+          industry,
+          scrapedData: {
+            title: scrapedData.title,
+            description: scrapedData.description,
+            mainContent: scrapedData.mainContent,
+            techStack: scrapedData.businessData?.technologies,
+            aiSignals: scrapedData.businessData?.aiMentions,
+            automationSignals: scrapedData.businessData?.automationMentions,
+            products: scrapedData.businessData?.products,
+            services: scrapedData.businessData?.services,
+            companyInfo: scrapedData.businessData?.companyInfo,
+          },
+        });
+
+        // Save results
+        await this.prisma.discoveryReport.update({
+          where: { id: reportId },
+          data: {
+            status: 'COMPLETED',
+            score: analysisResult.score,
+            maturityLevel: analysisResult.maturityLevel,
+            industry: analysisResult.industry,
+            companySize: analysisResult.companySize,
+            techStack: analysisResult.techStack as any,
+            aiSignals: analysisResult.aiSignals as any,
+            summary: analysisResult.summary,
+            recommendations: analysisResult.recommendations as any,
+            scrapedData: scrapedData as any,
+          },
+        });
+
+        this.logger.log(
+          `[${reportId}] Discovery scan completed in ${((Date.now() - start) / 1000).toFixed(1)}s — score: ${analysisResult.score}`,
+        );
+
+        // Send email if provided
+        if (email) {
+          await this.notifications.sendDiscoverySummary({
+            email,
+            url,
+            score: analysisResult.score,
+            maturityLevel: analysisResult.maturityLevel,
+            summary: analysisResult.summary,
+          });
+        }
+      } catch (error) {
+        this.logger.error(
+          `[${reportId}] Discovery scan failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+
+        await this.prisma.discoveryReport.update({
+          where: { id: reportId },
+          data: { status: 'FAILED' },
+        });
+
         throw error;
       }
     } else {

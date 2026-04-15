@@ -13,8 +13,15 @@ import { ConsultationModule } from './consultation';
 import { OnboardingModule } from './onboarding';
 import { DepartmentsModule } from './departments';
 import { DashboardModule } from './dashboard';
+import { TrackerModule } from './tracker/tracker.module';
 import { StorageModule } from './storage';
 import { HealthModule } from './health/health.module';
+import { NotificationsModule } from './notifications';
+import { DiscoveryModule } from './discovery';
+import { StackModule } from './stack';
+import { ImplementationModule } from './implementation/implementation.module';
+import { IntegrationsModule } from './integrations';
+import { DeploymentModule } from './deployment';
 
 @Module({
   imports: [
@@ -33,6 +40,7 @@ import { HealthModule } from './health/health.module';
     PrismaModule,
     RedisModule,
     QueueModule,
+    NotificationsModule,
     UsersModule,
     AuthModule,
     OrganizationsModule,
@@ -41,6 +49,12 @@ import { HealthModule } from './health/health.module';
     OnboardingModule,
     DepartmentsModule,
     DashboardModule,
+    TrackerModule,
+    DiscoveryModule,
+    StackModule,
+    ImplementationModule,
+    IntegrationsModule,
+    DeploymentModule,
     HealthModule,
   ],
   providers: [

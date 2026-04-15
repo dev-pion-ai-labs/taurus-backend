@@ -6,26 +6,22 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { Resend } from 'resend';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma';
 import { UsersService } from '../users';
+import { NotificationsService } from '../notifications';
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  private readonly resend: Resend;
-  private readonly fromEmail: string;
 
   constructor(
     private prisma: PrismaService,
     private usersService: UsersService,
     private jwtService: JwtService,
     private configService: ConfigService,
-  ) {
-    this.resend = new Resend(this.configService.get<string>('resend.apiKey'));
-    this.fromEmail = this.configService.get<string>('resend.fromEmail')!;
-  }
+    private notifications: NotificationsService,
+  ) {}
 
   async sendOtp(email: string) {
     const user = await this.usersService.findOrCreateByEmail(email);
@@ -42,19 +38,9 @@ export class AuthService {
       },
     });
 
-    // Send email via Resend
+    // Send email via NotificationsService
     try {
-      await this.resend.emails.send({
-        from: this.fromEmail,
-        to: email,
-        subject: 'Your Taurus login code',
-        html: `
-          <h2>Your verification code</h2>
-          <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px;">${code}</p>
-          <p>This code expires in 10 minutes.</p>
-          <p>If you didn't request this, you can safely ignore this email.</p>
-        `,
-      });
+      await this.notifications.sendOtp(email, code);
     } catch (error) {
       this.logger.error('Failed to send OTP email', error);
       throw new BadRequestException('Failed to send verification email');

@@ -3,12 +3,18 @@ import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 import { AiModule } from '../ai';
 import { OnboardingModule } from '../onboarding';
+import { IntegrationsModule } from '../integrations';
 import { AnalysisProcessor } from './analysis.processor';
+import { TrackerStallProcessor } from './tracker-stall.processor';
+import { RenewalCheckProcessor } from './renewal-check.processor';
+import { ImplementationProcessor } from './implementation.processor';
+import { TokenRefreshProcessor } from './token-refresh.processor';
 
 @Module({
   imports: [
     AiModule,
     OnboardingModule,
+    IntegrationsModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
@@ -54,9 +60,45 @@ import { AnalysisProcessor } from './analysis.processor';
           removeOnFail: 50,
         },
       },
+      {
+        name: 'tracker-alerts',
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          removeOnComplete: 100,
+          removeOnFail: 50,
+        },
+      },
+      {
+        name: 'renewal-alerts',
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          removeOnComplete: 100,
+          removeOnFail: 50,
+        },
+      },
+      {
+        name: 'implementation',
+        defaultJobOptions: {
+          attempts: 2,
+          backoff: { type: 'exponential', delay: 10000 },
+          removeOnComplete: 50,
+          removeOnFail: 25,
+        },
+      },
+      {
+        name: 'token-refresh',
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 10000 },
+          removeOnComplete: 50,
+          removeOnFail: 25,
+        },
+      },
     ),
   ],
-  providers: [AnalysisProcessor],
+  providers: [AnalysisProcessor, TrackerStallProcessor, RenewalCheckProcessor, ImplementationProcessor, TokenRefreshProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}
