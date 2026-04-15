@@ -255,6 +255,9 @@ export class DeploymentOrchestratorService {
       },
     });
 
+    // Update the tracker action status to DEPLOYED
+    await this.updateActionStatus(session.planId, 'DEPLOYED');
+
     this.logger.log(`Deployment session ${sessionId} completed successfully`);
     return this.getSession(sessionId);
   }
@@ -276,6 +279,9 @@ export class DeploymentOrchestratorService {
       where: { id: sessionId },
       data: { status: DeploymentSessionStatus.ROLLED_BACK },
     });
+
+    // Revert the tracker action status back to IN_PROGRESS
+    await this.updateActionStatus(session.planId, 'IN_PROGRESS');
 
     return this.getSession(sessionId);
   }
@@ -427,5 +433,31 @@ export class DeploymentOrchestratorService {
       where: { id: stepId },
       data: { status, error: data?.error },
     });
+  }
+
+  /**
+   * Update the tracker action status based on deployment outcome.
+   * Looks up the plan → action link and updates the action status.
+   */
+  private async updateActionStatus(planId: string, status: 'DEPLOYED' | 'IN_PROGRESS') {
+    try {
+      const plan = await this.prisma.deploymentPlan.findUnique({
+        where: { id: planId },
+        select: { actionId: true },
+      });
+
+      if (plan?.actionId) {
+        await this.prisma.transformationAction.update({
+          where: { id: plan.actionId },
+          data: { status },
+        });
+        this.logger.log(`Tracker action ${plan.actionId} updated to ${status}`);
+      }
+    } catch (error) {
+      // Non-critical — log but don't fail the deployment
+      this.logger.warn(
+        `Failed to update tracker action status: ${(error as Error).message}`,
+      );
+    }
   }
 }
