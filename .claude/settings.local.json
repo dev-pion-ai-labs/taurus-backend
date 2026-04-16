@@ -8,7 +8,9 @@
       "Bash(npm run:*)",
       "Bash(xargs wc:*)",
       "Bash(node -e ':*)",
-      "Bash(DATABASE_URL=\"postgresql://postgres:BQLDodLghNHslfLqWfgKSwxYEngIeVxo@mainline.proxy.rlwy.net:29695/railway\" npx prisma migrate deploy)"
+      "Bash(DATABASE_URL=\"postgresql://postgres:BQLDodLghNHslfLqWfgKSwxYEngIeVxo@mainline.proxy.rlwy.net:29695/railway\" npx prisma migrate deploy)",
+      "Bash(grep -r \"api\\\\|webhook\\\\|integration\\\\|oauth\\\\|external\\\\|service\" /c/Users/premh/Documents/Prem/prem/marqait/taurus-backend/src/config/*.ts)",
+      "Bash(find /c/Users/premh/Documents/Prem/prem/marqait/taurus-backend/src -name \"*.service.ts\" -exec grep -l \"credential\\\\|integration\\\\|oauth\\\\|provider\" {} \\\\;)"
     ]
   }
 }

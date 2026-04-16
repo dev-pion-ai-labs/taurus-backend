@@ -1,18 +1,15 @@
 # Taurus Backend
 
-Backend API for **Taurus — AI Transformation Operating System**. Helps organizations assess their AI readiness through industry-aware consultation sessions powered by Claude.
+Backend API for **Taurus — AI Transformation Operating System**. Helps organizations assess their AI readiness, plan transformation initiatives, and deploy changes directly to their connected tools — all powered by Claude.
 
 ## How It Works
 
-1. User signs up via passwordless OTP email (Resend)
-2. Creates an organization and selects their industry
-3. System checks if an AI-generated question template exists for that industry
-   - If yes — consultation starts instantly
-   - If no — Claude generates 10-15 industry-specific questions via BullMQ background job (~5s, first org only)
-4. User answers base questions (universal) + industry questions (AI-generated, cached per industry)
-5. Session completes — analysis queued for Phase 2
-
-Templates are shared platform resources: generated **once per industry**, then reused for every org. 50 industries = 50 AI calls, not 10,000.
+1. **Onboarding** — User signs up via passwordless OTP, creates an org, selects industry
+2. **Consultation** — AI generates industry-specific questions, user answers them
+3. **Analysis** — AI produces a transformation report with recommendations and maturity scoring
+4. **Tracker** — Recommendations become actionable cards on a kanban board (BACKLOG → DEPLOYED → VERIFIED)
+5. **Implementation** — AI generates deployment plans with steps, prerequisites, risks, and artifacts
+6. **Deployment** — Connected integrations (Slack, GitHub, Make, Notion) execute the plan automatically with dry-run, approval, and rollback
 
 ## Tech Stack
 
@@ -24,8 +21,9 @@ Templates are shared platform resources: generated **once per industry**, then r
 | Cache / Queue | Redis 7 (ioredis + BullMQ) |
 | AI | Anthropic Claude (via `@anthropic-ai/sdk`) |
 | Auth | Passwordless OTP via Resend + JWT (access + refresh tokens) |
+| Integrations | Slack (`@slack/web-api`), GitHub (`@octokit/rest`), Make.com, Notion (REST APIs) |
 | Docs | Swagger (auto-generated at `/api/docs`) |
-| Security | Helmet, CORS, rate limiting (`@nestjs/throttler`) |
+| Security | Helmet, CORS, rate limiting, AES-256-GCM credential encryption |
 
 ## Project Structure
 
@@ -36,23 +34,31 @@ src/
 ├── config/                          # Typed config factory, Joi env validation
 ├── prisma/                          # PrismaService (global)
 ├── redis/                           # RedisService — ioredis wrapper (global)
-├── queue/                           # BullMQ setup — template-generation & analysis queues
+├── queue/                           # BullMQ — template-gen, analysis, implementation, token-refresh
 ├── ai/                              # Anthropic SDK wrapper + prompt templates
+│   └── tools/                       # Agent tool definitions + executors (22 tools across 4 providers)
 ├── auth/                            # OTP send/verify, JWT issue/refresh/revoke
 ├── users/                           # Profile read/update
 ├── organizations/                   # Org CRUD, member listing
-├── consultation/
-│   ├── industry/                    # Industry list/search (public endpoint for dropdowns)
-│   ├── template/                    # Template lookup, AI generation, BullMQ processor
-│   ├── session/                     # Session lifecycle, sequential Q&A flow
-│   └── challenge/                   # Challenge area tagging for cross-industry matching
+├── consultation/                    # Industry questions, session lifecycle, Q&A flow
+├── onboarding/                      # Org onboarding data collection
+├── dashboard/                       # Executive dashboard, analytics
+├── departments/                     # Department + workflow management
+├── tracker/                         # Transformation action kanban board
+├── implementation/                  # AI deployment plan generation + artifact creation
+├── integrations/                    # Credential vault, OAuth, audit logging
+│   └── adapters/                    # Provider adapters (Slack, GitHub, Make, Notion)
+│       ├── slack/                   # Channels, messages, webhooks, user invites
+│       ├── github/                  # Repos, workflows, webhooks, secrets
+│       ├── make/                    # Scenarios, connections, activation
+│       └── notion/                  # Pages, databases, items
+├── deployment/                      # Multi-tool orchestration engine
+├── discovery/                       # Website scraping + AI analysis
+├── stack/                           # Tool/tech stack management
+├── notifications/                   # Email notifications (Resend)
+├── storage/                         # File upload handling
 ├── health/                          # DB + Redis health check
-└── common/
-    ├── decorators/                  # @CurrentUser(), @Roles()
-    ├── guards/                      # JwtAuthGuard, RolesGuard, OrgMemberGuard
-    ├── filters/                     # AllExceptionsFilter (Prisma errors → proper HTTP codes)
-    ├── interceptors/                # Logging, response envelope ({ data, meta })
-    └── dto/                         # PaginationQueryDto
+└── common/                          # Guards, decorators, filters, interceptors
 ```
 
 ## Prerequisites
@@ -61,7 +67,7 @@ src/
 - **PostgreSQL 16** — local or managed (e.g., Railway)
 - **Redis 7** — local or managed (e.g., Railway)
 - **Resend** account — for OTP emails
-- **Anthropic** API key — for AI question generation
+- **Anthropic** API key — for AI features
 
 ## Getting Started
 
@@ -80,14 +86,14 @@ cp .env.example .env
 Edit `.env` with your values:
 
 ```env
-# Database — local or Railway PostgreSQL
+# Database
 DATABASE_URL=postgresql://user:pass@localhost:5432/taurus_db
 
-# Redis — use REDIS_URL for managed services, or host/port for local
+# Redis
 REDIS_URL=                          # e.g., redis://default:pass@host:port
-REDIS_HOST=localhost                # ignored when REDIS_URL is set
-REDIS_PORT=6379                     # ignored when REDIS_URL is set
-REDIS_PASSWORD=                     # ignored when REDIS_URL is set
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
 
 # Auth
 JWT_ACCESS_SECRET=<random-64-char-string>
@@ -98,18 +104,28 @@ RESEND_FROM_EMAIL=noreply@yourdomain.com
 # AI
 ANTHROPIC_API_KEY=sk-ant-xxxxx
 ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# Credential encryption (min 32 chars, required for integrations)
+CREDENTIAL_ENCRYPTION_KEY=<random-32-char-string>
+
+# Slack integration (OAuth — create app at api.slack.com)
+SLACK_CLIENT_ID=
+SLACK_CLIENT_SECRET=
+
+# GitHub integration (OAuth — create app at github.com/settings/developers)
+GITHUB_APP_ID=
+GITHUB_PRIVATE_KEY=
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+
+# Make.com and Notion use API key auth — clients enter keys via Settings UI
 ```
 
 ### 3. Set up the database
 
 ```bash
-# Generate Prisma client
 npx prisma generate
-
-# Run migrations
 npx prisma migrate dev
-
-# Seed industries, challenge areas, and base template
 npx prisma db seed
 ```
 
@@ -149,36 +165,52 @@ All endpoints are prefixed with `/api/v1`.
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/organizations` | JWT | Create org (triggers template generation) |
+| POST | `/organizations` | JWT | Create org |
 | GET | `/organizations/:id` | JWT + Member | Get org details |
 | PATCH | `/organizations/:id` | JWT + Admin | Update org |
-| GET | `/organizations/:id/members` | JWT + Member | List members (paginated) |
+| GET | `/organizations/:id/members` | JWT + Member | List members |
 
-### Industries
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/industries` | Public | List/search industries |
-| GET | `/industries/:id` | Public | Get industry details |
-
-### Consultation Templates
+### Tracker
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/consultation/templates` | JWT + Admin | List all templates |
-| GET | `/consultation/templates/:id` | JWT | Get template details |
-| POST | `/consultation/templates/:id/regenerate` | JWT + Admin | Regenerate template |
+| GET | `/tracker/actions` | JWT | List transformation actions |
+| PATCH | `/tracker/actions/:id` | JWT | Update action (status, assignee, etc.) |
 
-### Consultation Sessions
+### Implementation
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/consultation/sessions` | JWT | Start a consultation |
-| GET | `/consultation/sessions` | JWT | List sessions (paginated) |
-| GET | `/consultation/sessions/:id` | JWT | Get session with all Q&As |
-| GET | `/consultation/sessions/:id/current-question` | JWT | Get next unanswered question |
-| POST | `/consultation/sessions/:id/answers` | JWT | Submit answer, get next question |
-| PATCH | `/consultation/sessions/:id/abandon` | JWT | Abandon session |
+| POST | `/implementation/plans` | JWT | Create deployment plan (AI generates) |
+| GET | `/implementation/plans` | JWT | List plans |
+| GET | `/implementation/plans/:id` | JWT | Get plan with steps/artifacts |
+| POST | `/implementation/plans/:id/approve` | JWT | Approve plan |
+| POST | `/implementation/plans/:id/execute` | JWT | Generate artifacts |
+| POST | `/implementation/plans/:id/refine` | JWT | Refine with feedback |
+| POST | `/implementation/plans/:id/reject` | JWT | Reject plan |
+
+### Integrations
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/organizations/:orgId/integrations` | JWT + Member | List connected integrations |
+| GET | `/organizations/:orgId/integrations/connect/:provider` | JWT + Member | Start OAuth flow |
+| POST | `/organizations/:orgId/integrations/connect-api-key` | JWT + Member | Connect via API key |
+| POST | `/organizations/:orgId/integrations/:id/test` | JWT + Member | Test connection |
+| DELETE | `/organizations/:orgId/integrations/:id` | JWT + Member | Disconnect |
+| GET | `/organizations/:orgId/integrations/audit-logs` | JWT + Member | Audit trail |
+
+### Deployment (Multi-Tool Orchestration)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/organizations/:orgId/deploy` | JWT + Member | Create deployment session |
+| GET | `/organizations/:orgId/deploy` | JWT + Member | List sessions (filter by planId) |
+| GET | `/organizations/:orgId/deploy/:sessionId` | JWT + Member | Get session with steps |
+| POST | `/organizations/:orgId/deploy/:sessionId/dry-run` | JWT + Member | Preview all steps |
+| POST | `/organizations/:orgId/deploy/:sessionId/approve` | JWT + Member | Approve after dry-run |
+| POST | `/organizations/:orgId/deploy/:sessionId/execute` | JWT + Member | Execute all steps |
+| POST | `/organizations/:orgId/deploy/:sessionId/rollback` | JWT + Member | Rollback completed steps |
 
 ### Health
 
@@ -186,22 +218,39 @@ All endpoints are prefixed with `/api/v1`.
 |--------|----------|------|-------------|
 | GET | `/health` | Public | DB + Redis connectivity check |
 
+## Agent Tools
+
+The AI implementation engine has 22 tools available across 4 providers:
+
+| Provider | Tools | Auth |
+|----------|-------|------|
+| **Slack** | `slack_list_channels`, `slack_list_users`, `slack_create_channel`, `slack_post_message`, `slack_invite_to_channel`, `slack_create_webhook` | OAuth |
+| **GitHub** | `github_list_repos`, `github_list_workflows`, `github_create_workflow`, `github_create_webhook`, `github_trigger_workflow`, `github_list_secrets` | OAuth |
+| **Make.com** | `make_list_scenarios`, `make_list_connections`, `make_create_scenario`, `make_activate_scenario`, `make_test_scenario` | API Key |
+| **Notion** | `notion_list_databases`, `notion_search_pages`, `notion_create_page`, `notion_create_database`, `notion_add_database_item` | API Key |
+
+All mutating tools support `dryRun: true` for preview without side effects. Every execution is audit-logged with rollback data.
+
 ## Database Schema
 
-Key models and their relationships:
+Key models:
 
 ```
 Industry          1──*  Organization
-Industry          1──*  ConsultationTemplate (INDUSTRY type)
+Organization      1──*  User
 Organization      1──*  ConsultationSession
-User              1──*  ConsultationSession
-ConsultationTemplate  1──*  TemplateQuestion
-TemplateQuestion  *──*  ChallengeArea (via QuestionChallengeArea)
-ConsultationSession   1──*  SessionQuestion
-SessionQuestion   *──1  TemplateQuestion
-```
+Organization      1──*  TransformationAction (tracker board)
+Organization      1──*  DeploymentPlan
+Organization      1──*  OrgIntegration (encrypted credentials)
+Organization      1──*  DeploymentSession
 
-20 industries and 15 challenge areas are pre-seeded. A base template with 7 universal questions is seeded on first run.
+TransformationAction  1──*  DeploymentPlan
+DeploymentPlan        1──*  DeploymentArtifact
+DeploymentPlan        1──*  DeploymentSession
+DeploymentSession     1──*  DeploymentStep
+
+OrgIntegration    1──*  DeploymentAuditLog
+```
 
 ## Deployment
 
@@ -214,9 +263,7 @@ docker run -p 3000:3000 --env-file .env taurus-backend
 
 ### Railway
 
-The app is designed to work with Railway's managed PostgreSQL and Redis. Set `DATABASE_URL` and `REDIS_URL` from Railway's provisioned variables — no other changes needed.
-
-For production migrations, use `prisma migrate deploy` (not `migrate dev`):
+Set `DATABASE_URL` and `REDIS_URL` from Railway's provisioned variables. For production migrations:
 
 ```bash
 npx prisma migrate deploy

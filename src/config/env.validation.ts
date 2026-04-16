@@ -29,4 +29,14 @@ export const envValidationSchema = Joi.object({
   THROTTLE_LIMIT: Joi.number().default(60),
 
   UPLOAD_DIR: Joi.string().default('./uploads'),
+
+  CREDENTIAL_ENCRYPTION_KEY: Joi.string().min(32).optional(),
+
+  SLACK_CLIENT_ID: Joi.string().optional(),
+  SLACK_CLIENT_SECRET: Joi.string().optional(),
+
+  GITHUB_APP_ID: Joi.string().optional(),
+  GITHUB_PRIVATE_KEY: Joi.string().optional(),
+  GITHUB_CLIENT_ID: Joi.string().optional(),
+  GITHUB_CLIENT_SECRET: Joi.string().optional(),
 });

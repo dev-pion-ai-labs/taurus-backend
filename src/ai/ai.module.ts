@@ -4,7 +4,15 @@ import { ImplementationAiService } from './implementation-ai.service';
 import { ImplementationToolExecutor } from './tools/implementation-tool-executor';
 
 @Module({
-  providers: [AiService, ImplementationAiService, ImplementationToolExecutor],
-  exports: [AiService, ImplementationAiService, ImplementationToolExecutor],
+  providers: [
+    AiService,
+    ImplementationAiService,
+    ImplementationToolExecutor,
+  ],
+  exports: [
+    AiService,
+    ImplementationAiService,
+    ImplementationToolExecutor,
+  ],
 })
 export class AiModule {}
