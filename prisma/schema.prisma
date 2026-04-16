@@ -128,6 +128,24 @@ enum ArtifactType {
   CUSTOM
 }
 
+enum IntegrationProvider {
+  SLACK
+  GOOGLE_DRIVE
+  MICROSOFT_TEAMS
+  JIRA
+  SALESFORCE
+  HUBSPOT
+  ZAPIER
+  NOTION
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  DISCONNECTED
+  EXPIRED
+  ERROR
+}
+
 // ─── Models ──────────────────────────────────────────────
 
 model Industry {
@@ -163,6 +181,7 @@ model Organization {
   toolEntries      ToolEntry[]
   toolSpendRecords ToolSpendRecord[]
   deploymentPlans  DeploymentPlan[]
+  integrations     IntegrationConnection[]
 
   @@index([industryId])
   @@map("organizations")
@@ -186,6 +205,7 @@ model User {
   assignedActions  TransformationAction[] @relation("ActionAssignee")
   actionComments   ActionComment[]
   deploymentPlans  DeploymentPlan[]
+  integrations     IntegrationConnection[]
 
   @@index([organizationId])
   @@map("users")
@@ -693,18 +713,50 @@ model DeploymentPlan {
 }
 
 model DeploymentArtifact {
-  id         String       @id @default(uuid())
-  planId     String       @map("plan_id")
-  type       ArtifactType
-  title      String
-  content    String       @db.Text
-  metadata   Json?
-  orderIndex Int          @default(0) @map("order_index")
-  createdAt  DateTime     @default(now()) @map("created_at")
-  updatedAt  DateTime     @updatedAt @map("updated_at")
+  id             String       @id @default(uuid())
+  planId         String       @map("plan_id")
+  type           ArtifactType
+  title          String
+  content        String       @db.Text
+  metadata       Json?
+  checklistState Json?        @map("checklist_state") // { [lineIndex: number]: boolean }
+  orderIndex     Int          @default(0) @map("order_index")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
 
   plan       DeploymentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
 
   @@index([planId])
   @@map("deployment_artifacts")
+}
+
+// ─── Integrations ────────────────────────────────────────
+
+model IntegrationConnection {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  provider       IntegrationProvider
+  status         IntegrationStatus   @default(CONNECTED)
+
+  accessToken    String              @map("access_token") @db.Text
+  refreshToken   String?             @map("refresh_token") @db.Text
+  tokenExpiresAt DateTime?           @map("token_expires_at")
+  scope          String?
+
+  externalTeamId   String?           @map("external_team_id")
+  externalTeamName String?           @map("external_team_name")
+  metadata         Json?
+
+  connectedBy    String              @map("connected_by")
+  connectedAt    DateTime            @default(now()) @map("connected_at")
+  disconnectedAt DateTime?           @map("disconnected_at")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User                @relation(fields: [connectedBy], references: [id])
+
+  @@unique([organizationId, provider])
+  @@index([organizationId])
+  @@map("integration_connections")
 }

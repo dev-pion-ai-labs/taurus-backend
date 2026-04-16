@@ -34,4 +34,30 @@ export default () => ({
   storage: {
     uploadDir: process.env.UPLOAD_DIR || './uploads',
   },
+  integrations: {
+    slack: {
+      clientId: process.env.SLACK_CLIENT_ID || '',
+      clientSecret: process.env.SLACK_CLIENT_SECRET || '',
+    },
+    google_drive: {
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    },
+    jira: {
+      clientId: process.env.JIRA_CLIENT_ID || '',
+      clientSecret: process.env.JIRA_CLIENT_SECRET || '',
+    },
+    notion: {
+      clientId: process.env.NOTION_CLIENT_ID || '',
+      clientSecret: process.env.NOTION_CLIENT_SECRET || '',
+    },
+    hubspot: {
+      clientId: process.env.HUBSPOT_CLIENT_ID || '',
+      clientSecret: process.env.HUBSPOT_CLIENT_SECRET || '',
+    },
+    salesforce: {
+      clientId: process.env.SALESFORCE_CLIENT_ID || '',
+      clientSecret: process.env.SALESFORCE_CLIENT_SECRET || '',
+    },
+  },
 });

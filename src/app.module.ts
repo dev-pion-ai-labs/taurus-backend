@@ -20,6 +20,7 @@ import { NotificationsModule } from './notifications';
 import { DiscoveryModule } from './discovery';
 import { StackModule } from './stack';
 import { ImplementationModule } from './implementation/implementation.module';
+import { IntegrationsModule } from './integrations';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { ImplementationModule } from './implementation/implementation.module';
     DiscoveryModule,
     StackModule,
     ImplementationModule,
+    IntegrationsModule,
     HealthModule,
   ],
   providers: [

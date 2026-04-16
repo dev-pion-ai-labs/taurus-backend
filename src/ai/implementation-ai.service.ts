@@ -180,10 +180,23 @@ export class ImplementationAiService {
   }
 
   private parsePlanResult(text: string): PlanResult {
-    const cleaned = text
+    // Strip markdown fences
+    let cleaned = text
       .replace(/```json?\s*\n?/gi, '')
       .replace(/```\s*/gi, '')
       .trim();
+
+    // If the response has text around the JSON, extract the JSON object
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace > 0 || lastBrace < cleaned.length - 1) {
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        this.logger.warn(
+          'Plan response contained non-JSON text, extracting JSON object',
+        );
+        cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+      }
+    }
 
     const plan: PlanResult = JSON.parse(cleaned);
 

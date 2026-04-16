@@ -9,6 +9,8 @@ IMPORTANT RULES:
 4. Call get_related_actions to identify dependencies and prerequisites.
 5. After gathering context, produce the plan as a single JSON object.
 
+CRITICAL: When you are done using tools and ready to produce the plan, your ENTIRE response must be a single valid JSON object. Do NOT include any text before or after the JSON. Do NOT say "here is the plan" or "I now have" or any other preamble. Just output the JSON.
+
 Your output MUST be a valid JSON object with this exact structure:
 {
   "title": "Concise plan title",
@@ -34,7 +36,7 @@ Your output MUST be a valid JSON object with this exact structure:
   "suggestedArtifacts": ["IMPLEMENTATION_GUIDE", "CONFIGURATION_TEMPLATE", "INTEGRATION_CHECKLIST", "VENDOR_EVALUATION", "CODE_SNIPPET"]
 }
 
-Return ONLY the JSON object, no markdown fences or explanatory text.`;
+Return ONLY the raw JSON object. No markdown fences, no explanatory text, no preamble, no commentary. Your entire response must start with { and end with }.`;
 
 export interface PlanGenerationContext {
   actionId: string;

@@ -8,6 +8,7 @@ import {
   type PlanResult,
 } from '../ai/implementation-ai.service';
 import type { ArtifactGenerationContext } from '../ai/prompts/implementation-artifact.prompt';
+import { SlackService } from '../integrations/services/slack.service';
 
 interface GeneratePlanJob {
   planId: string;
@@ -33,6 +34,7 @@ export class ImplementationProcessor extends WorkerHost {
   constructor(
     private prisma: PrismaService,
     private implementationAi: ImplementationAiService,
+    private slack: SlackService,
   ) {
     super();
   }
@@ -85,6 +87,11 @@ export class ImplementationProcessor extends WorkerHost {
 
       // Save the plan
       await this.savePlan(data.planId, plan, conversationHistory);
+
+      // Notify Slack
+      this.slack
+        .notifyPlanReady(data.orgId, plan.title, action.title, plan.steps.length)
+        .catch(() => {}); // fire-and-forget
 
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
       this.logger.log(
@@ -207,11 +214,17 @@ export class ImplementationProcessor extends WorkerHost {
         data: { status: 'COMPLETED', completedAt: new Date() },
       });
 
-      // Auto-advance action to DEPLOYED
+      // Advance action to IN_PROGRESS — it only moves to DEPLOYED
+      // when the user completes the integration checklist and triggers deploy
       await this.prisma.transformationAction.update({
         where: { id: plan.actionId },
-        data: { status: 'DEPLOYED', deployedAt: new Date() },
+        data: { status: 'IN_PROGRESS' },
       });
+
+      // Notify Slack
+      this.slack
+        .notifyArtifactsReady(data.orgId, plan.title, artifactTypes.length)
+        .catch(() => {}); // fire-and-forget
 
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
       this.logger.log(
