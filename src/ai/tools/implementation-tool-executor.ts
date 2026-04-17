@@ -1,11 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import { IntegrationToolExecutor } from './integration-tool-executor';
 
 @Injectable()
 export class ImplementationToolExecutor {
   private readonly logger = new Logger(ImplementationToolExecutor.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private integrationTools: IntegrationToolExecutor,
+  ) {}
 
   async executeTool(
     toolName: string,
@@ -13,6 +17,11 @@ export class ImplementationToolExecutor {
     organizationId: string,
   ): Promise<unknown> {
     this.logger.debug(`Executing tool: ${toolName} for org ${organizationId}`);
+
+    // Delegate to integration executor if it handles this tool
+    if (this.integrationTools.canHandle(toolName)) {
+      return this.integrationTools.executeTool(toolName, input, organizationId);
+    }
 
     switch (toolName) {
       case 'get_organization_context':

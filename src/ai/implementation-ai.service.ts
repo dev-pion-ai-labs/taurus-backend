@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { ArtifactType } from '@prisma/client';
 import { IMPLEMENTATION_TOOLS } from './tools/implementation-tools';
+import { INTEGRATION_TOOLS } from './tools/integration-tools';
 import { ImplementationToolExecutor } from './tools/implementation-tool-executor';
 import {
   IMPLEMENTATION_PLAN_SYSTEM_PROMPT,
@@ -129,7 +130,7 @@ export class ImplementationAiService {
         model: this.model,
         max_tokens: 8192,
         system: IMPLEMENTATION_PLAN_SYSTEM_PROMPT,
-        tools: IMPLEMENTATION_TOOLS,
+        tools: [...IMPLEMENTATION_TOOLS, ...INTEGRATION_TOOLS],
         messages,
       });
 
