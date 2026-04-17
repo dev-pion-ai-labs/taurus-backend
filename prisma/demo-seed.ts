@@ -346,9 +346,95 @@ async function main() {
   ];
 
   const departmentScores = [
-    { department: 'Support', score: 32, maturityLevel: 'AI Curious' },
-    { department: 'Sales', score: 44, maturityLevel: 'AI Curious' },
-    { department: 'Engineering', score: 51, maturityLevel: 'AI Active' },
+    {
+      department: 'Support',
+      score: 32,
+      maturityLevel: 'AI Curious',
+      currentState:
+        'Tier-1 handles ~400 tickets/day with 4h avg response. About 60% of agent time goes to routine password/billing issues. No AI tooling in the ticket workflow.',
+      potentialState:
+        'AI triages and drafts replies to routine tickets. Tier-1 reviews in one click. Avg response drops to under an hour; 2+ agents freed to handle complex issues.',
+      efficiencyValue: 43000 + 67000,
+      growthValue: 0,
+      workflows: [
+        {
+          name: 'Incoming ticket triage',
+          currentProcess: 'Manual reading + tagging by the first available tier-1 agent, routed to specialist queues by hand.',
+          aiOpportunity: 'Classify ticket intent + urgency automatically; route to the right queue with 95%+ accuracy.',
+          automationPotential: 85,
+          weeklyHoursSaved: 12,
+          annualValueSaved: 43000,
+          effort: 'LOW',
+          timeframe: 'WEEKS',
+        },
+        {
+          name: 'First-touch response drafting',
+          currentProcess: 'Agent reads ticket, searches knowledge base, copy-pastes template, edits inline.',
+          aiOpportunity: 'Pre-draft reply from ticket + KB context. Agent reviews and sends in one click.',
+          automationPotential: 70,
+          weeklyHoursSaved: 18,
+          annualValueSaved: 67000,
+          effort: 'MEDIUM',
+          timeframe: 'WEEKS',
+        },
+      ],
+    },
+    {
+      department: 'Sales',
+      score: 44,
+      maturityLevel: 'AI Curious',
+      currentState:
+        'SDRs qualify inbound leads manually. Outreach is boilerplate. CSMs see churn only after a cancellation request.',
+      potentialState:
+        'AI scores leads in real-time and drafts personalized first-touch. Churn risk surfaces weekly so CSMs intervene before cancellations.',
+      efficiencyValue: 0,
+      growthValue: 95000 + 38000,
+      workflows: [
+        {
+          name: 'Inbound lead outreach',
+          currentProcess: 'SDRs manually research + write each first-touch email. ~8 emails/hour.',
+          aiOpportunity: 'Generate personalized outreach from firmographics + activity. SDR review + send. 3x throughput.',
+          automationPotential: 75,
+          weeklyHoursSaved: 10,
+          annualValueSaved: 38000,
+          effort: 'LOW',
+          timeframe: 'WEEKS',
+        },
+        {
+          name: 'Account health + churn signals',
+          currentProcess: 'No proactive monitoring. CSMs hear about churn risk when a cancellation ticket arrives.',
+          aiOpportunity: 'Weekly churn score from usage + support signals. Top 20% at-risk accounts auto-flagged.',
+          automationPotential: 80,
+          weeklyHoursSaved: 6,
+          annualValueSaved: 95000,
+          effort: 'MEDIUM',
+          timeframe: 'MONTHS',
+        },
+      ],
+    },
+    {
+      department: 'Engineering',
+      score: 51,
+      maturityLevel: 'AI Active',
+      currentState:
+        'Engineers frequently interrupt each other with "how does X work?" questions. Docs are scattered across Notion and Drive.',
+      potentialState:
+        'RAG assistant answers internal questions instantly, cites the source doc, and learns from new Notion pages as they land.',
+      efficiencyValue: 28000,
+      growthValue: 0,
+      workflows: [
+        {
+          name: 'Internal knowledge lookup',
+          currentProcess: 'Slack DM a teammate or scroll through Notion/Drive. ~25 min per lookup, often interrupts two people.',
+          aiOpportunity: 'Ask a question in Slack → AI answers from indexed Notion + Drive with citations. ~45 sec.',
+          automationPotential: 65,
+          weeklyHoursSaved: 8,
+          annualValueSaved: 28000,
+          effort: 'LOW',
+          timeframe: 'WEEKS',
+        },
+      ],
+    },
   ];
 
   const totalAnnualValue = recommendations.reduce((s, r) => s + r.annualValue, 0);
@@ -360,9 +446,14 @@ async function main() {
     .reduce((s, r) => s + r.annualValue, 0);
 
   const executiveSummary = {
-    headline: `Acme's AI maturity is 38/100 — firmly 'AI Curious.' Six initiatives totaling $${totalAnnualValue.toLocaleString()}/yr in annual value are ready to sequence over 16 weeks, starting with a 2-week ticket-categorization deployment that generates $43K/yr on its own.`,
-    topOpportunities: ['Automated ticket categorization', 'AI response suggestions for tier-1', 'Predictive churn scoring'],
-    riskSummary: 'Team AI literacy is low in Support and Sales — plan for light training alongside each rollout.',
+    summary: `Acme's AI maturity is 38/100 — firmly 'AI Curious.' Six initiatives totaling $${totalAnnualValue.toLocaleString()}/yr in annual value are ready to sequence over 16 weeks, starting with a 2-week ticket-categorization deployment that generates $43K/yr on its own. Support is the most constrained department today and also the highest-ROI starting point.`,
+    keyFindings: [
+      'Support carries the biggest drag: 60% of tier-1 time goes to routine tickets AI can triage and draft in seconds.',
+      '$289K/yr total identified value across six recommendations, with $81K/yr reachable in the first 4 weeks (Quick Wins phase).',
+      'Sales has the largest single-initiative upside: predictive churn scoring projects $95K/yr but requires 6 weeks and a product-usage pipeline.',
+      'Engineering is the most AI-ready department (score 51) — the docs RAG assistant is a low-effort win that also compounds team velocity.',
+      'Team AI literacy is uneven — plan ~2 hours of role-specific training alongside each rollout so adoption sticks.',
+    ],
   };
 
   await prisma.transformationReport.upsert({
