@@ -102,6 +102,114 @@ export class SlackService {
     return 'general';
   }
 
+  // ── Action Methods ─────────────────────────────────────
+
+  /** Create a Slack channel */
+  async createChannel(organizationId: string, name: string, isPrivate = false) {
+    const token = await this.getConnectionToken(organizationId);
+
+    const response = await fetch('https://slack.com/api/conversations.create', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: name.toLowerCase().replace(/[^a-z0-9-_]/g, '-'), is_private: isPrivate }),
+    });
+
+    const data = await response.json() as { ok: boolean; channel?: { id: string; name: string }; error?: string };
+    if (!data.ok) {
+      this.logger.error(`Failed to create channel: ${data.error}`);
+      if (data.error === 'name_taken') return { channelId: null, error: 'Channel name already taken' };
+      return { channelId: null, error: data.error };
+    }
+
+    this.logger.log(`Created Slack channel #${data.channel!.name} for org ${organizationId}`);
+    return { channelId: data.channel!.id, name: data.channel!.name };
+  }
+
+  /** Invite users to a channel */
+  async inviteToChannel(organizationId: string, channelId: string, userIds: string[]) {
+    const token = await this.getConnectionToken(organizationId);
+
+    const response = await fetch('https://slack.com/api/conversations.invite', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ channel: channelId, users: userIds.join(',') }),
+    });
+
+    const data = await response.json() as { ok: boolean; error?: string };
+    return { ok: data.ok, error: data.error };
+  }
+
+  /** Set channel topic */
+  async setChannelTopic(organizationId: string, channelId: string, topic: string) {
+    const token = await this.getConnectionToken(organizationId);
+
+    await fetch('https://slack.com/api/conversations.setTopic', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ channel: channelId, topic }),
+    });
+
+    return { channelId, topic };
+  }
+
+  /** List workspace users */
+  async listUsers(organizationId: string) {
+    const token = await this.getConnectionToken(organizationId);
+
+    const response = await fetch('https://slack.com/api/users.list?limit=100', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const data = await response.json() as {
+      ok: boolean;
+      members?: { id: string; name: string; real_name: string; profile: { email?: string } }[];
+    };
+
+    if (!data.ok || !data.members) return [];
+
+    return data.members
+      .filter((m) => !m.name.includes('bot') && m.id !== 'USLACKBOT')
+      .map((m) => ({ id: m.id, name: m.real_name, email: m.profile.email }));
+  }
+
+  /** List channels */
+  async listChannels(organizationId: string) {
+    const token = await this.getConnectionToken(organizationId);
+
+    const response = await fetch('https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=100', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const data = await response.json() as {
+      ok: boolean;
+      channels?: { id: string; name: string; is_private: boolean; num_members: number }[];
+    };
+
+    if (!data.ok || !data.channels) return [];
+    return data.channels.map((c) => ({ id: c.id, name: c.name, isPrivate: c.is_private, members: c.num_members }));
+  }
+
+  private async getConnectionToken(organizationId: string): Promise<string> {
+    const connection = await this.prisma.integrationConnection.findUnique({
+      where: { organizationId_provider: { organizationId, provider: 'SLACK' } },
+    });
+
+    if (!connection || connection.status !== 'CONNECTED') {
+      throw new Error('Slack is not connected');
+    }
+
+    return connection.accessToken;
+  }
+
   // ── Pre-built notification templates ───────────────────
 
   async notifyPlanReady(
