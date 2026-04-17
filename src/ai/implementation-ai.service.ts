@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
-import { ArtifactType } from '@prisma/client';
+import { ArtifactType, IntegrationProvider } from '@prisma/client';
 import { IMPLEMENTATION_TOOLS } from './tools/implementation-tools';
 import { INTEGRATION_TOOLS } from './tools/integration-tools';
 import { ImplementationToolExecutor } from './tools/implementation-tool-executor';
@@ -17,6 +17,27 @@ import {
   type ArtifactGenerationContext,
 } from './prompts/implementation-artifact.prompt';
 
+export type DeploymentStepStatus =
+  | 'pending'
+  | 'executing'
+  | 'completed'
+  | 'failed'
+  | 'skipped';
+
+export interface DeploymentStepPlan {
+  provider: IntegrationProvider;
+  tool: string;
+  params: Record<string, unknown>;
+  dependsOn?: number[];
+  description?: string;
+  // Runtime state — populated by PlanExecutor at deploy time; the AI never emits these.
+  status?: DeploymentStepStatus;
+  result?: unknown;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
 export interface PlanResult {
   title: string;
   summary: string;
@@ -31,7 +52,35 @@ export interface PlanResult {
   risks: { risk: string; mitigation: string; severity: string }[];
   estimatedDuration: string;
   suggestedArtifacts: ArtifactType[];
+  deploymentSteps: DeploymentStepPlan[];
 }
+
+// Tool names the PlanExecutor knows how to run (mirrors INTEGRATION_TOOLS minus read-only helpers).
+const EXECUTABLE_TOOL_NAMES = new Set<string>([
+  'slack_create_channel',
+  'slack_send_message',
+  'slack_set_channel_topic',
+  'gdrive_create_document',
+  'jira_create_issue',
+  'jira_transition_issue',
+  'jira_add_comment',
+  'notion_create_page',
+  'notion_create_database',
+  'hubspot_create_contact',
+  'hubspot_create_deal',
+  'salesforce_create_record',
+]);
+
+const VALID_PROVIDERS = new Set<IntegrationProvider>([
+  'SLACK',
+  'GOOGLE_DRIVE',
+  'MICROSOFT_TEAMS',
+  'JIRA',
+  'SALESFORCE',
+  'HUBSPOT',
+  'ZAPIER',
+  'NOTION',
+]);
 
 export interface ArtifactResult {
   type: ArtifactType;
@@ -224,6 +273,63 @@ export class ImplementationAiService {
       );
     }
 
+    plan.deploymentSteps = this.sanitizeDeploymentSteps(
+      (plan as { deploymentSteps?: unknown }).deploymentSteps,
+    );
+
     return plan;
+  }
+
+  private sanitizeDeploymentSteps(raw: unknown): DeploymentStepPlan[] {
+    if (!Array.isArray(raw)) return [];
+
+    const cleaned: DeploymentStepPlan[] = [];
+    for (const [i, entry] of raw.entries()) {
+      if (!entry || typeof entry !== 'object') continue;
+      const step = entry as Record<string, unknown>;
+
+      const provider = step.provider;
+      const tool = step.tool;
+      const params = step.params;
+
+      if (
+        typeof provider !== 'string' ||
+        !VALID_PROVIDERS.has(provider as IntegrationProvider)
+      ) {
+        this.logger.warn(
+          `Dropping deploymentStep[${i}]: invalid provider ${JSON.stringify(provider)}`,
+        );
+        continue;
+      }
+      if (typeof tool !== 'string' || !EXECUTABLE_TOOL_NAMES.has(tool)) {
+        this.logger.warn(
+          `Dropping deploymentStep[${i}]: unknown or non-executable tool ${JSON.stringify(tool)}`,
+        );
+        continue;
+      }
+      if (!params || typeof params !== 'object' || Array.isArray(params)) {
+        this.logger.warn(
+          `Dropping deploymentStep[${i}]: params must be an object`,
+        );
+        continue;
+      }
+
+      const dependsOnRaw = step.dependsOn;
+      const dependsOn = Array.isArray(dependsOnRaw)
+        ? dependsOnRaw.filter(
+            (n): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0,
+          )
+        : undefined;
+
+      cleaned.push({
+        provider: provider as IntegrationProvider,
+        tool,
+        params: params as Record<string, unknown>,
+        dependsOn,
+        description:
+          typeof step.description === 'string' ? step.description : undefined,
+      });
+    }
+    return cleaned;
   }
 }

@@ -8,6 +8,7 @@ import { AnalysisProcessor } from './analysis.processor';
 import { TrackerStallProcessor } from './tracker-stall.processor';
 import { RenewalCheckProcessor } from './renewal-check.processor';
 import { ImplementationProcessor } from './implementation.processor';
+import { PlanExecutorService } from '../implementation/plan-executor.service';
 
 @Module({
   imports: [
@@ -88,7 +89,13 @@ import { ImplementationProcessor } from './implementation.processor';
       },
     ),
   ],
-  providers: [AnalysisProcessor, TrackerStallProcessor, RenewalCheckProcessor, ImplementationProcessor],
+  providers: [
+    AnalysisProcessor,
+    TrackerStallProcessor,
+    RenewalCheckProcessor,
+    ImplementationProcessor,
+    PlanExecutorService,
+  ],
   exports: [BullModule],
 })
 export class QueueModule {}

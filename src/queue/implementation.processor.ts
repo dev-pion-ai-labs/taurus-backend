@@ -9,6 +9,7 @@ import {
 } from '../ai/implementation-ai.service';
 import type { ArtifactGenerationContext } from '../ai/prompts/implementation-artifact.prompt';
 import { SlackService } from '../integrations/services/slack.service';
+import { PlanExecutorService } from '../implementation/plan-executor.service';
 
 interface GeneratePlanJob {
   planId: string;
@@ -27,6 +28,18 @@ interface GenerateArtifactsJob {
   orgId: string;
 }
 
+interface ExecutePlanJob {
+  planId: string;
+  orgId: string;
+  userId: string;
+}
+
+type ImplementationJob =
+  | GeneratePlanJob
+  | RefinePlanJob
+  | GenerateArtifactsJob
+  | ExecutePlanJob;
+
 @Processor('implementation', { concurrency: 1 })
 export class ImplementationProcessor extends WorkerHost {
   private readonly logger = new Logger(ImplementationProcessor.name);
@@ -35,13 +48,12 @@ export class ImplementationProcessor extends WorkerHost {
     private prisma: PrismaService,
     private implementationAi: ImplementationAiService,
     private slack: SlackService,
+    private planExecutor: PlanExecutorService,
   ) {
     super();
   }
 
-  async process(
-    job: Job<GeneratePlanJob | RefinePlanJob | GenerateArtifactsJob>,
-  ) {
+  async process(job: Job<ImplementationJob>) {
     switch (job.name) {
       case 'generate-plan':
         return this.handleGeneratePlan(job.data as GeneratePlanJob);
@@ -49,8 +61,33 @@ export class ImplementationProcessor extends WorkerHost {
         return this.handleRefinePlan(job.data as RefinePlanJob);
       case 'generate-artifacts':
         return this.handleGenerateArtifacts(job.data as GenerateArtifactsJob);
+      case 'execute-plan':
+        return this.handleExecutePlan(job.data as ExecutePlanJob);
       default:
         this.logger.warn(`Unknown job name: ${job.name}`);
+    }
+  }
+
+  private async handleExecutePlan(data: ExecutePlanJob) {
+    const start = Date.now();
+    this.logger.log(`[${data.planId}] Starting plan execution`);
+
+    try {
+      const summary = await this.planExecutor.execute(
+        data.planId,
+        data.orgId,
+        data.userId,
+      );
+
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      this.logger.log(
+        `[${data.planId}] Plan execution finished in ${elapsed}s — ${summary.completed}/${summary.total} completed, ${summary.failed} failed`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `[${data.planId}] Plan execution crashed: ${(error as Error).message}`,
+      );
+      throw error;
     }
   }
 
@@ -258,6 +295,7 @@ export class ImplementationProcessor extends WorkerHost {
         risks: plan.risks as any,
         estimatedDuration: plan.estimatedDuration,
         suggestedArtifacts: plan.suggestedArtifacts as any,
+        deploymentSteps: plan.deploymentSteps as any,
         conversationHistory: conversationHistory as any,
       },
     });

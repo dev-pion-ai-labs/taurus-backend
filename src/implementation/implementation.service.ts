@@ -8,7 +8,6 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma';
-import { SlackService } from '../integrations/services/slack.service';
 import {
   CreatePlanDto,
   PlanQueryDto,
@@ -24,7 +23,6 @@ export class ImplementationService {
   constructor(
     private prisma: PrismaService,
     @InjectQueue('implementation') private implementationQueue: Queue,
-    private slack: SlackService,
   ) {}
 
   // ── Create Plan ────────────────────────────────────────
@@ -353,27 +351,18 @@ export class ImplementationService {
       }
     }
 
-    // Mark action as deployed
-    const action = await this.prisma.transformationAction.update({
-      where: { id: plan.actionId },
-      data: { status: 'DEPLOYED', deployedAt: new Date() },
-    });
+    // Hand off to PlanExecutor via the queue. The job runs deploymentSteps
+    // against the connected integrations, persists per-step results back to
+    // the plan, then marks the tracker action DEPLOYED and notifies Slack.
+    // (For legacy plans with empty deploymentSteps, the executor short-circuits
+    // straight to the mark-deployed step, preserving the old behavior.)
+    await this.implementationQueue.add(
+      'execute-plan',
+      { planId: id, orgId: organizationId, userId },
+      { attempts: 2, backoff: { type: 'exponential', delay: 10000 } },
+    );
 
-    // Get deployer name
-    const deployer = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { firstName: true, lastName: true, email: true },
-    });
-    const deployerName = [deployer?.firstName, deployer?.lastName]
-      .filter(Boolean)
-      .join(' ') || deployer?.email || 'Unknown';
-
-    // Notify Slack
-    this.slack
-      .notifyDeployed(organizationId, action.title, deployerName)
-      .catch(() => {}); // fire-and-forget
-
-    this.logger.log(`Plan ${id} deployed by ${userId}`);
+    this.logger.log(`Plan ${id} deployment queued by ${userId}`);
 
     return { id, deployed: true };
   }

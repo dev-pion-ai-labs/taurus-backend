@@ -694,6 +694,7 @@ model DeploymentPlan {
   risks               Json?           // [{ risk, mitigation, severity }]
   estimatedDuration   String?         @map("estimated_duration")
   suggestedArtifacts  Json?           @map("suggested_artifacts") // ArtifactType[]
+  deploymentSteps     Json?           @map("deployment_steps")    // [{ provider, tool, params, dependsOn?, description? }] — consumed by PlanExecutor at deploy time
 
   approvedAt     DateTime?            @map("approved_at")
   approvedBy     String?              @map("approved_by")
