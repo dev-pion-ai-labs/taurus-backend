@@ -6,88 +6,139 @@ import {
   Body,
   Param,
   Query,
-  Res,
   UseGuards,
+  ParseUUIDPipe,
   BadRequestException,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
-import * as express from 'express';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IntegrationProvider } from '@prisma/client';
+import { JwtAuthGuard, CurrentUser } from '../common';
 import { IntegrationsService } from './integrations.service';
-import { ConnectApiKeyDto } from './dto';
-import { OrgMemberGuard } from '../common/guards/org-member.guard';
+import { GoogleDriveService } from './services/google-drive.service';
+import { ConnectIntegrationDto } from './dto';
 
 @ApiTags('Integrations')
-@Controller('organizations/:orgId/integrations')
 @ApiBearerAuth()
-@UseGuards(AuthGuard('jwt'), OrgMemberGuard)
+@UseGuards(JwtAuthGuard)
+@Controller('integrations')
 export class IntegrationsController {
-  constructor(private integrationsService: IntegrationsService) {}
+  constructor(
+    private integrationsService: IntegrationsService,
+    private googleDrive: GoogleDriveService,
+  ) {}
 
-  /** List all connected integrations for the organization */
+  // ── List connected integrations ────────────────────────
+
   @Get()
-  async listIntegrations(@Param('orgId') orgId: string) {
-    return this.integrationsService.listIntegrations(orgId);
+  listConnections(
+    @CurrentUser() user: { organizationId: string | null },
+  ) {
+    this.requireOrg(user.organizationId);
+    return this.integrationsService.listConnections(user.organizationId);
   }
 
-  /** Redirect to provider's OAuth consent screen */
-  @Get('connect/:provider')
-  async connectOAuth(
-    @Param('orgId') orgId: string,
-    @Param('provider') provider: string,
-    @Res() res: express.Response,
+  // ── Get OAuth authorize URL ────────────────────────────
+
+  @Get(':provider/authorize')
+  getAuthorizeUrl(
+    @CurrentUser() user: { id: string; organizationId: string | null },
+    @Param('provider') providerRaw: string,
+    @Query('redirectUri') redirectUri: string,
   ) {
-    const providerEnum = this.parseProvider(provider);
-    const redirectUrl = this.integrationsService.getOAuthRedirectUrl(
-      providerEnum,
-      orgId,
+    this.requireOrg(user.organizationId);
+    const provider = this.parseProvider(providerRaw);
+
+    if (!redirectUri) {
+      throw new BadRequestException('redirectUri query param is required');
+    }
+
+    // State encodes org + user for the callback
+    const state = Buffer.from(
+      JSON.stringify({
+        orgId: user.organizationId,
+        userId: user.id,
+        provider: providerRaw,
+      }),
+    ).toString('base64url');
+
+    const url = this.integrationsService.getAuthorizeUrl(
+      provider,
+      redirectUri,
+      state,
     );
-    return res.redirect(redirectUrl);
+
+    return { url };
   }
 
-  /** Manually connect via API key (for providers without OAuth) */
-  @Post('connect-api-key')
-  async connectApiKey(
-    @Param('orgId') orgId: string,
-    @Body() dto: ConnectApiKeyDto,
+  // ── OAuth callback (exchange code) ─────────────────────
+
+  @Post(':provider/callback')
+  connect(
+    @CurrentUser() user: { id: string; organizationId: string | null },
+    @Param('provider') providerRaw: string,
+    @Body() dto: ConnectIntegrationDto,
   ) {
-    return this.integrationsService.connectApiKey(orgId, dto);
+    this.requireOrg(user.organizationId);
+    const provider = this.parseProvider(providerRaw);
+
+    const redirectUri =
+      dto.redirectUri || `${process.env.CORS_ORIGIN || 'http://localhost:3001'}/settings?tab=integrations`;
+
+    return this.integrationsService.connect(
+      provider,
+      dto.code,
+      redirectUri,
+      user.organizationId,
+      user.id,
+    );
   }
 
-  /** Test an existing connection */
-  @Post(':integrationId/test')
-  async testConnection(@Param('integrationId') integrationId: string) {
-    return this.integrationsService.testConnection(integrationId);
-  }
+  // ── Disconnect ─────────────────────────────────────────
 
-  /** Disconnect and revoke an integration */
-  @Delete(':integrationId')
-  async disconnect(
-    @Param('orgId') orgId: string,
-    @Param('integrationId') integrationId: string,
+  @Delete(':id')
+  disconnect(
+    @CurrentUser() user: { organizationId: string | null },
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.integrationsService.disconnect(integrationId, orgId);
+    this.requireOrg(user.organizationId);
+    return this.integrationsService.disconnect(id, user.organizationId);
   }
 
-  /** Get audit logs for this organization's deployments */
-  @Get('audit-logs')
-  async getAuditLogs(@Param('orgId') orgId: string) {
-    return this.integrationsService.getAuditLogs(orgId);
-  }
+  // ── Google Drive Exports ────────────────────────────────
 
-  /** Get audit logs for a specific integration */
-  @Get(':integrationId/audit-logs')
-  async getIntegrationAuditLogs(
-    @Param('integrationId') integrationId: string,
+  @Post('google-drive/export/report/:reportId')
+  exportReport(
+    @CurrentUser() user: { organizationId: string | null },
+    @Param('reportId', ParseUUIDPipe) reportId: string,
   ) {
-    return this.integrationsService.getIntegrationAuditLogs(integrationId);
+    this.requireOrg(user.organizationId);
+    return this.googleDrive.exportReport(user.organizationId, reportId);
   }
 
-  private parseProvider(provider: string): IntegrationProvider {
-    const upper = provider.toUpperCase() as IntegrationProvider;
-    if (!Object.values(IntegrationProvider).includes(upper)) {
-      throw new BadRequestException(`Unknown provider: ${provider}`);
+  @Post('google-drive/export/artifact/:artifactId')
+  exportArtifact(
+    @CurrentUser() user: { organizationId: string | null },
+    @Param('artifactId', ParseUUIDPipe) artifactId: string,
+  ) {
+    this.requireOrg(user.organizationId);
+    return this.googleDrive.exportArtifact(user.organizationId, artifactId);
+  }
+
+  // ── Helpers ────────────────────────────────────────────
+
+  private requireOrg(orgId: string | null): asserts orgId is string {
+    if (!orgId) {
+      throw new BadRequestException('User must belong to an organization');
+    }
+  }
+
+  private parseProvider(raw: string): IntegrationProvider {
+    const upper = raw.toUpperCase().replace(/-/g, '_') as IntegrationProvider;
+    const valid: Set<string> = new Set(Object.values(IntegrationProvider));
+    if (!valid.has(upper)) {
+      throw new BadRequestException(
+        `Invalid provider "${raw}". Valid: ${[...valid].join(', ')}`,
+      );
     }
     return upper;
   }

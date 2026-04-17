@@ -34,17 +34,30 @@ export default () => ({
   storage: {
     uploadDir: process.env.UPLOAD_DIR || './uploads',
   },
-  credential: {
-    encryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,
-  },
-  slack: {
-    clientId: process.env.SLACK_CLIENT_ID,
-    clientSecret: process.env.SLACK_CLIENT_SECRET,
-  },
-  github: {
-    appId: process.env.GITHUB_APP_ID,
-    privateKey: process.env.GITHUB_PRIVATE_KEY,
-    clientId: process.env.GITHUB_CLIENT_ID,
-    clientSecret: process.env.GITHUB_CLIENT_SECRET,
+  integrations: {
+    slack: {
+      clientId: process.env.SLACK_CLIENT_ID || '',
+      clientSecret: process.env.SLACK_CLIENT_SECRET || '',
+    },
+    google_drive: {
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    },
+    jira: {
+      clientId: process.env.JIRA_CLIENT_ID || '',
+      clientSecret: process.env.JIRA_CLIENT_SECRET || '',
+    },
+    notion: {
+      clientId: process.env.NOTION_CLIENT_ID || '',
+      clientSecret: process.env.NOTION_CLIENT_SECRET || '',
+    },
+    hubspot: {
+      clientId: process.env.HUBSPOT_CLIENT_ID || '',
+      clientSecret: process.env.HUBSPOT_CLIENT_SECRET || '',
+    },
+    salesforce: {
+      clientId: process.env.SALESFORCE_CLIENT_ID || '',
+      clientSecret: process.env.SALESFORCE_CLIENT_SECRET || '',
+    },
   },
 });

@@ -21,7 +21,6 @@ import { DiscoveryModule } from './discovery';
 import { StackModule } from './stack';
 import { ImplementationModule } from './implementation/implementation.module';
 import { IntegrationsModule } from './integrations';
-import { DeploymentModule } from './deployment';
 
 @Module({
   imports: [
@@ -54,7 +53,6 @@ import { DeploymentModule } from './deployment';
     StackModule,
     ImplementationModule,
     IntegrationsModule,
-    DeploymentModule,
     HealthModule,
   ],
   providers: [

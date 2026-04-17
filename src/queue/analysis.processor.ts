@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma';
 import { AiService } from '../ai';
 import { WebsiteScraperService } from '../onboarding/website-scraper.service';
 import { NotificationsService } from '../notifications';
+import { SlackService } from '../integrations/services/slack.service';
 import type { ReportGenerationContext } from '../ai/prompts/report-generation.prompt';
 
 interface ReportGenerationJob {
@@ -34,6 +35,7 @@ export class AnalysisProcessor extends WorkerHost {
     private aiService: AiService,
     private websiteScraper: WebsiteScraperService,
     private notifications: NotificationsService,
+    private slack: SlackService,
   ) {
     super();
   }
@@ -120,6 +122,16 @@ export class AnalysisProcessor extends WorkerHost {
             `[${reportId}] Failed to send report-ready notification: ${(notifError as Error).message}`,
           );
         }
+
+        // Slack notification
+        this.slack
+          .notifyReportReady(
+            organizationId,
+            reportData.overallScore,
+            reportData.maturityLevel,
+            totalEfficiencyValue + totalGrowthValue,
+          )
+          .catch(() => {});
       } catch (error) {
         this.logger.error(
           `[${reportId}] Report generation failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${(error as Error).message}`,

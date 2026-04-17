@@ -8,7 +8,13 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma';
-import { CreatePlanDto, PlanQueryDto, RefinePlanDto, RejectPlanDto } from './dto';
+import {
+  CreatePlanDto,
+  PlanQueryDto,
+  RefinePlanDto,
+  RejectPlanDto,
+  UpdateChecklistDto,
+} from './dto';
 
 @Injectable()
 export class ImplementationService {
@@ -263,6 +269,114 @@ export class ImplementationService {
 
     const { plan: _, ...data } = artifact;
     return data;
+  }
+
+  // ── Checklist ──────────────────────────────────────────
+
+  async updateChecklist(
+    artifactId: string,
+    organizationId: string,
+    dto: UpdateChecklistDto,
+  ) {
+    const artifact = await this.prisma.deploymentArtifact.findUnique({
+      where: { id: artifactId },
+      include: { plan: { select: { organizationId: true, status: true } } },
+    });
+
+    if (!artifact || artifact.plan.organizationId !== organizationId) {
+      throw new NotFoundException('Artifact not found');
+    }
+
+    if (artifact.plan.status !== 'COMPLETED') {
+      throw new BadRequestException(
+        'Can only update checklist on completed plans',
+      );
+    }
+
+    // Validate the lineIndex refers to an actual checklist line
+    const checklistLines = this.extractChecklistLines(artifact.content);
+    if (!checklistLines.includes(dto.lineIndex)) {
+      throw new BadRequestException(
+        `Line ${dto.lineIndex} is not a checklist item`,
+      );
+    }
+
+    const currentState = (artifact.checklistState as Record<string, boolean>) || {};
+    const updated = { ...currentState, [dto.lineIndex]: dto.checked };
+
+    await this.prisma.deploymentArtifact.update({
+      where: { id: artifactId },
+      data: { checklistState: updated },
+    });
+
+    // Calculate progress
+    const total = checklistLines.length;
+    const checked = Object.values(updated).filter(Boolean).length;
+
+    return { id: artifactId, checklistState: updated, progress: { checked, total } };
+  }
+
+  // ── Deploy (manual, after checklists done) ─────────────
+
+  async deployPlan(id: string, organizationId: string, userId: string) {
+    const plan = await this.prisma.deploymentPlan.findFirst({
+      where: { id, organizationId },
+      include: { artifacts: true },
+    });
+
+    if (!plan) {
+      throw new NotFoundException('Deployment plan not found');
+    }
+
+    if (plan.status !== 'COMPLETED') {
+      throw new BadRequestException(
+        `Cannot deploy plan in ${plan.status} status — must be COMPLETED`,
+      );
+    }
+
+    // Check all integration checklists are fully checked
+    const checklists = plan.artifacts.filter(
+      (a) => a.type === 'INTEGRATION_CHECKLIST',
+    );
+
+    for (const checklist of checklists) {
+      const lines = this.extractChecklistLines(checklist.content);
+      const state = (checklist.checklistState as Record<string, boolean>) || {};
+      const unchecked = lines.filter((idx) => !state[idx]);
+
+      if (unchecked.length > 0) {
+        throw new BadRequestException(
+          `Integration checklist "${checklist.title}" has ${unchecked.length} unchecked item(s) — complete all items before deploying`,
+        );
+      }
+    }
+
+    // Hand off to PlanExecutor via the queue. The job runs deploymentSteps
+    // against the connected integrations, persists per-step results back to
+    // the plan, then marks the tracker action DEPLOYED and notifies Slack.
+    // (For legacy plans with empty deploymentSteps, the executor short-circuits
+    // straight to the mark-deployed step, preserving the old behavior.)
+    await this.implementationQueue.add(
+      'execute-plan',
+      { planId: id, orgId: organizationId, userId },
+      { attempts: 2, backoff: { type: 'exponential', delay: 10000 } },
+    );
+
+    this.logger.log(`Plan ${id} deployment queued by ${userId}`);
+
+    return { id, deployed: true };
+  }
+
+  // ── Helpers ────────────────────────────────────────────
+
+  /** Returns zero-based line indices that are markdown checklist items (- [ ] or - [x]) */
+  private extractChecklistLines(content: string): number[] {
+    return content
+      .split('\n')
+      .reduce<number[]>((acc, line, idx) => {
+        if (/^\s*-\s*\[[ x]\]/i.test(line)) acc.push(idx);
+        return acc;
+      }, []);
   }
 
   // ── Delete Plan ────────────────────────────────────────

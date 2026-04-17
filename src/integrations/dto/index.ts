@@ -1,1 +1,1 @@
-export { ConnectApiKeyDto } from './connect-api-key.dto';
+export { ConnectIntegrationDto } from './connect-integration.dto';

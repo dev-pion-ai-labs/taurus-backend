@@ -1,9 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
-import { SlackToolExecutor } from './slack-tool-executor';
-import { GitHubToolExecutor } from './github-tool-executor';
-import { MakeToolExecutor } from './make-tool-executor';
-import { NotionToolExecutor } from './notion-tool-executor';
+import { IntegrationToolExecutor } from './integration-tool-executor';
 
 @Injectable()
 export class ImplementationToolExecutor {
@@ -11,10 +8,7 @@ export class ImplementationToolExecutor {
 
   constructor(
     private prisma: PrismaService,
-    private slackToolExecutor: SlackToolExecutor,
-    private githubToolExecutor: GitHubToolExecutor,
-    private makeToolExecutor: MakeToolExecutor,
-    private notionToolExecutor: NotionToolExecutor,
+    private integrationTools: IntegrationToolExecutor,
   ) {}
 
   async executeTool(
@@ -24,18 +18,9 @@ export class ImplementationToolExecutor {
   ): Promise<unknown> {
     this.logger.debug(`Executing tool: ${toolName} for org ${organizationId}`);
 
-    // Delegate to provider-specific executors
-    if (this.slackToolExecutor.canHandle(toolName)) {
-      return this.slackToolExecutor.executeTool(toolName, input, organizationId);
-    }
-    if (this.githubToolExecutor.canHandle(toolName)) {
-      return this.githubToolExecutor.executeTool(toolName, input, organizationId);
-    }
-    if (this.makeToolExecutor.canHandle(toolName)) {
-      return this.makeToolExecutor.executeTool(toolName, input, organizationId);
-    }
-    if (this.notionToolExecutor.canHandle(toolName)) {
-      return this.notionToolExecutor.executeTool(toolName, input, organizationId);
+    // Delegate to integration executor if it handles this tool
+    if (this.integrationTools.canHandle(toolName)) {
+      return this.integrationTools.executeTool(toolName, input, organizationId);
     }
 
     switch (toolName) {

@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Body,
   Param,
@@ -13,7 +14,13 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard, CurrentUser } from '../common';
 import { ImplementationService } from './implementation.service';
-import { CreatePlanDto, RefinePlanDto, RejectPlanDto, PlanQueryDto } from './dto';
+import {
+  CreatePlanDto,
+  RefinePlanDto,
+  RejectPlanDto,
+  PlanQueryDto,
+  UpdateChecklistDto,
+} from './dto';
 
 @ApiTags('Implementation Engine')
 @ApiBearerAuth()
@@ -123,6 +130,37 @@ export class ImplementationController {
   ) {
     this.requireOrg(user.organizationId);
     return this.implementationService.getArtifact(id, user.organizationId);
+  }
+
+  // ── Checklist ──────────────────────────────────────────
+
+  @Patch('artifacts/:id/checklist')
+  updateChecklist(
+    @CurrentUser() user: { organizationId: string | null },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateChecklistDto,
+  ) {
+    this.requireOrg(user.organizationId);
+    return this.implementationService.updateChecklist(
+      id,
+      user.organizationId,
+      dto,
+    );
+  }
+
+  // ── Deploy ────────────────────────────────────────────
+
+  @Post('plans/:id/deploy')
+  deployPlan(
+    @CurrentUser() user: { id: string; organizationId: string | null },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    this.requireOrg(user.organizationId);
+    return this.implementationService.deployPlan(
+      id,
+      user.organizationId,
+      user.id,
+    );
   }
 
   // ── Delete ─────────────────────────────────────────────

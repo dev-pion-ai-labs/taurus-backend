@@ -1,233 +1,320 @@
 import {
   Injectable,
-  Inject,
   Logger,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { IntegrationProvider, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
-import { CredentialVaultService } from './credential-vault.service';
-import { AuditLogService } from './audit-log.service';
-import { AuthType, IntegrationProvider, IntegrationStatus } from '@prisma/client';
-import { ConnectApiKeyDto } from './dto';
-import { DeploymentAdapter } from './adapters/base.adapter';
-import { DEPLOYMENT_ADAPTERS } from './adapters/base.adapter';
-
-/** Per-provider OAuth config. Populated when provider adapters register. */
-export interface OAuthProviderConfig {
-  clientId: string;
-  clientSecret: string;
-  authorizeUrl: string;
-  tokenUrl: string;
-  scopes: string[];
-  callbackPath: string;
-}
+import { getProviderConfig } from './oauth-providers';
 
 @Injectable()
 export class IntegrationsService {
   private readonly logger = new Logger(IntegrationsService.name);
 
-  /** Registered OAuth configs, keyed by provider */
-  private oauthConfigs = new Map<IntegrationProvider, OAuthProviderConfig>();
-
   constructor(
     private prisma: PrismaService,
-    private configService: ConfigService,
-    private credentialVault: CredentialVaultService,
-    private auditLog: AuditLogService,
-    @Inject(DEPLOYMENT_ADAPTERS)
-    private adapters: Map<IntegrationProvider, DeploymentAdapter>,
+    private config: ConfigService,
   ) {}
 
-  // ─── OAuth Config Registry ────────────────────────────
+  // ── List connections ───────────────────────────────────
 
-  registerOAuthProvider(provider: IntegrationProvider, config: OAuthProviderConfig) {
-    this.oauthConfigs.set(provider, config);
-    this.logger.log(`Registered OAuth config for ${provider}`);
+  async listConnections(organizationId: string) {
+    return this.prisma.integrationConnection.findMany({
+      where: { organizationId },
+      select: {
+        id: true,
+        provider: true,
+        status: true,
+        externalTeamName: true,
+        scope: true,
+        connectedAt: true,
+        connectedBy: true,
+        user: { select: { firstName: true, lastName: true, email: true } },
+      },
+      orderBy: { connectedAt: 'desc' },
+    });
   }
 
-  // ─── OAuth Flow ───────────────────────────────────────
+  // ── Get authorize URL ──────────────────────────────────
 
-  getOAuthRedirectUrl(provider: IntegrationProvider, orgId: string): string {
-    const config = this.oauthConfigs.get(provider);
-    if (!config) {
+  getAuthorizeUrl(
+    provider: IntegrationProvider,
+    redirectUri: string,
+    state: string,
+  ): string {
+    const providerConfig = getProviderConfig(provider);
+    if (!providerConfig) {
       throw new BadRequestException(
-        `OAuth is not configured for provider: ${provider}`,
+        `OAuth not supported for provider: ${provider}`,
       );
     }
 
-    const appUrl = this.configService.get<string>('app.corsOrigin');
-    const backendPort = this.configService.get<number>('app.port');
-    const callbackUrl = `http://localhost:${backendPort}/api/v1${config.callbackPath}`;
+    const clientId = this.config.get<string>(
+      `integrations.${provider.toLowerCase()}.clientId`,
+    );
 
-    // State contains orgId so we can associate on callback
-    const state = Buffer.from(JSON.stringify({ orgId })).toString('base64url');
+    if (!clientId) {
+      throw new BadRequestException(
+        `${provider} integration is not configured — missing client ID`,
+      );
+    }
 
     const params = new URLSearchParams({
-      client_id: config.clientId,
-      scope: config.scopes.join(' '),
-      redirect_uri: callbackUrl,
+      client_id: clientId,
+      redirect_uri: redirectUri,
       response_type: 'code',
       state,
     });
 
-    return `${config.authorizeUrl}?${params.toString()}`;
+    // Provider-specific params
+    if (provider === 'SLACK') {
+      params.set('scope', providerConfig.scopes.join(','));
+    } else if (provider === 'GOOGLE_DRIVE') {
+      params.set('scope', providerConfig.scopes.join(' '));
+      params.set('access_type', 'offline');
+      params.set('prompt', 'consent');
+    } else if (provider === 'JIRA') {
+      params.set('scope', providerConfig.scopes.join(' '));
+      params.set('audience', 'api.atlassian.com');
+      params.set('prompt', 'consent');
+    } else {
+      params.set('scope', providerConfig.scopes.join(' '));
+    }
+
+    return `${providerConfig.authorizeUrl}?${params.toString()}`;
   }
 
-  async handleOAuthCallback(
+  // ── Exchange code for tokens ───────────────────────────
+
+  async connect(
     provider: IntegrationProvider,
     code: string,
-    state: string,
+    redirectUri: string,
+    organizationId: string,
+    userId: string,
   ) {
-    const config = this.oauthConfigs.get(provider);
-    if (!config) {
+    const providerConfig = getProviderConfig(provider);
+    if (!providerConfig) {
       throw new BadRequestException(
-        `OAuth is not configured for provider: ${provider}`,
+        `OAuth not supported for provider: ${provider}`,
       );
     }
 
-    // Decode state to get orgId
-    let orgId: string;
-    try {
-      const parsed = JSON.parse(
-        Buffer.from(state, 'base64url').toString('utf8'),
+    const clientId = this.config.get<string>(
+      `integrations.${provider.toLowerCase()}.clientId`,
+    );
+    const clientSecret = this.config.get<string>(
+      `integrations.${provider.toLowerCase()}.clientSecret`,
+    );
+
+    if (!clientId || !clientSecret) {
+      throw new BadRequestException(
+        `${provider} integration is not configured`,
       );
-      orgId = parsed.orgId;
-    } catch {
-      throw new BadRequestException('Invalid OAuth state parameter');
     }
 
-    // Exchange authorization code for tokens
-    const backendPort = this.configService.get<number>('app.port');
-    const callbackUrl = `http://localhost:${backendPort}/api/v1${config.callbackPath}`;
+    // Exchange code for tokens
+    const tokenData = await this.exchangeCode(
+      provider,
+      providerConfig.tokenUrl,
+      code,
+      clientId,
+      clientSecret,
+      redirectUri,
+    );
 
-    const tokenResponse = await fetch(config.tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-        code,
-        redirect_uri: callbackUrl,
-        grant_type: 'authorization_code',
-      }),
+    // Upsert the connection (one per org per provider)
+    const connection = await this.prisma.integrationConnection.upsert({
+      where: {
+        organizationId_provider: { organizationId, provider },
+      },
+      update: {
+        status: 'CONNECTED',
+        accessToken: tokenData.accessToken,
+        refreshToken: tokenData.refreshToken ?? null,
+        tokenExpiresAt: tokenData.expiresAt ?? null,
+        scope: tokenData.scope ?? null,
+        externalTeamId: tokenData.teamId ?? null,
+        externalTeamName: tokenData.teamName ?? null,
+        metadata: (tokenData.metadata as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+        connectedBy: userId,
+        connectedAt: new Date(),
+        disconnectedAt: null,
+      },
+      create: {
+        organizationId,
+        provider,
+        status: 'CONNECTED',
+        accessToken: tokenData.accessToken,
+        refreshToken: tokenData.refreshToken ?? null,
+        tokenExpiresAt: tokenData.expiresAt ?? null,
+        scope: tokenData.scope ?? null,
+        externalTeamId: tokenData.teamId ?? null,
+        externalTeamName: tokenData.teamName ?? null,
+        metadata: (tokenData.metadata as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+        connectedBy: userId,
+      },
     });
 
-    if (!tokenResponse.ok) {
-      const errorBody = await tokenResponse.text();
-      this.logger.error(`OAuth token exchange failed for ${provider}: ${errorBody}`);
-      throw new BadRequestException('OAuth token exchange failed');
-    }
+    this.logger.log(
+      `${provider} connected for org ${organizationId} by user ${userId}`,
+    );
 
-    const tokenData = await tokenResponse.json();
-
-    // Store encrypted credentials
-    const credentials = {
-      accessToken: tokenData.access_token,
-      refreshToken: tokenData.refresh_token,
-      extra: tokenData,
+    return {
+      id: connection.id,
+      provider: connection.provider,
+      status: connection.status,
+      externalTeamName: connection.externalTeamName,
+      connectedAt: connection.connectedAt,
     };
+  }
 
-    // Calculate expiry
-    let expiresAt: Date | undefined;
-    if (tokenData.expires_in) {
-      expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
+  // ── Disconnect ─────────────────────────────────────────
+
+  async disconnect(
+    id: string,
+    organizationId: string,
+  ) {
+    const connection = await this.prisma.integrationConnection.findFirst({
+      where: { id, organizationId },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('Integration connection not found');
     }
 
-    const integration = await this.credentialVault.store(
-      orgId,
-      provider,
-      AuthType.OAUTH2,
-      credentials,
-      config.scopes,
-      {
-        expiresAt,
-        metadata: {
-          team_id: tokenData.team?.id,
-          team_name: tokenData.team?.name,
-          bot_user_id: tokenData.bot_user_id,
-        },
+    await this.prisma.integrationConnection.update({
+      where: { id },
+      data: {
+        status: 'DISCONNECTED',
+        disconnectedAt: new Date(),
+        accessToken: '',
+        refreshToken: null,
       },
+    });
+
+    this.logger.log(
+      `${connection.provider} disconnected for org ${organizationId}`,
     );
 
-    this.logger.log(`OAuth connection stored for ${provider}, org ${orgId}`);
-    return integration;
+    return { id, disconnected: true };
   }
 
-  // ─── API Key Connection ───────────────────────────────
+  // ── Token exchange per provider ────────────────────────
 
-  async connectApiKey(orgId: string, dto: ConnectApiKeyDto) {
-    const credentials = { apiKey: dto.apiKey };
+  private async exchangeCode(
+    provider: IntegrationProvider,
+    tokenUrl: string,
+    code: string,
+    clientId: string,
+    clientSecret: string,
+    redirectUri: string,
+  ): Promise<{
+    accessToken: string;
+    refreshToken?: string;
+    expiresAt?: Date;
+    scope?: string;
+    teamId?: string;
+    teamName?: string;
+    metadata?: Record<string, unknown>;
+  }> {
+    let body: string;
+    const headers: Record<string, string> = {};
 
-    return this.credentialVault.store(
-      orgId,
-      dto.provider,
-      AuthType.API_KEY,
-      credentials,
-      dto.scopes ?? [],
-      { label: dto.label },
-    );
+    if (provider === 'NOTION') {
+      // Notion uses Basic Auth for token exchange
+      const encoded = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+      headers['Authorization'] = `Basic ${encoded}`;
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+      });
+    } else {
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      body = new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }).toString();
+    }
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers,
+      body,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      this.logger.error(
+        `Token exchange failed for ${provider}: ${response.status} ${errorText}`,
+      );
+      throw new BadRequestException(
+        `Failed to connect ${provider} — invalid or expired authorization code`,
+      );
+    }
+
+    const data = await response.json();
+
+    // Normalize the response per provider
+    return this.normalizeTokenResponse(provider, data);
   }
 
-  // ─── CRUD ─────────────────────────────────────────────
-
-  async listIntegrations(orgId: string) {
-    return this.credentialVault.listByOrganization(orgId);
-  }
-
-  async testConnection(integrationId: string) {
-    try {
-      const { provider, credentials } =
-        await this.credentialVault.retrieveById(integrationId);
-
-      // Use provider adapter if available for a real connection test
-      const adapter = this.adapters.get(provider);
-      if (adapter) {
-        return adapter.testConnection(credentials);
+  private normalizeTokenResponse(
+    provider: IntegrationProvider,
+    data: Record<string, unknown>,
+  ) {
+    switch (provider) {
+      case 'SLACK': {
+        const authedUser = data.authed_user as Record<string, unknown> | undefined;
+        return {
+          accessToken: (data.access_token as string) || (authedUser?.access_token as string) || '',
+          refreshToken: data.refresh_token as string | undefined,
+          scope: data.scope as string | undefined,
+          teamId: (data.team as Record<string, unknown>)?.id as string | undefined,
+          teamName: (data.team as Record<string, unknown>)?.name as string | undefined,
+          metadata: { botUserId: data.bot_user_id, appId: data.app_id },
+        };
       }
 
-      // Fallback: just verify credentials are readable
-      const hasToken = !!(
-        credentials.accessToken ||
-        credentials.apiKey ||
-        credentials.bearerToken
-      );
+      case 'GOOGLE_DRIVE': {
+        const expiresIn = data.expires_in as number | undefined;
+        return {
+          accessToken: data.access_token as string,
+          refreshToken: data.refresh_token as string | undefined,
+          expiresAt: expiresIn
+            ? new Date(Date.now() + expiresIn * 1000)
+            : undefined,
+          scope: data.scope as string | undefined,
+        };
+      }
 
-      return {
-        success: hasToken,
-        message: hasToken
-          ? 'Credentials are readable and present'
-          : 'No valid credentials found',
-      };
-    } catch {
-      return {
-        success: false,
-        message: 'Failed to read credentials',
-      };
+      case 'NOTION': {
+        return {
+          accessToken: data.access_token as string,
+          teamId: (data.workspace_id as string) || undefined,
+          teamName: (data.workspace_name as string) || undefined,
+          metadata: { botId: data.bot_id, owner: data.owner },
+        };
+      }
+
+      default: {
+        const expiresIn = data.expires_in as number | undefined;
+        return {
+          accessToken: data.access_token as string,
+          refreshToken: data.refresh_token as string | undefined,
+          expiresAt: expiresIn
+            ? new Date(Date.now() + expiresIn * 1000)
+            : undefined,
+          scope: data.scope as string | undefined,
+        };
+      }
     }
-  }
-
-  async disconnect(integrationId: string, orgId: string) {
-    // Verify it belongs to the org
-    const integration = await this.prisma.orgIntegration.findFirst({
-      where: { id: integrationId, organizationId: orgId },
-    });
-
-    if (!integration) {
-      throw new NotFoundException('Integration not found');
-    }
-
-    return this.credentialVault.revoke(integrationId);
-  }
-
-  // ─── Audit Logs ───────────────────────────────────────
-
-  async getAuditLogs(orgId: string) {
-    return this.auditLog.getByOrganization(orgId);
-  }
-
-  async getIntegrationAuditLogs(integrationId: string) {
-    return this.auditLog.getByIntegration(integrationId);
   }
 }

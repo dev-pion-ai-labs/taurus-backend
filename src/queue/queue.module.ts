@@ -8,7 +8,7 @@ import { AnalysisProcessor } from './analysis.processor';
 import { TrackerStallProcessor } from './tracker-stall.processor';
 import { RenewalCheckProcessor } from './renewal-check.processor';
 import { ImplementationProcessor } from './implementation.processor';
-import { TokenRefreshProcessor } from './token-refresh.processor';
+import { PlanExecutorService } from '../implementation/plan-executor.service';
 
 @Module({
   imports: [
@@ -87,18 +87,15 @@ import { TokenRefreshProcessor } from './token-refresh.processor';
           removeOnFail: 25,
         },
       },
-      {
-        name: 'token-refresh',
-        defaultJobOptions: {
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 10000 },
-          removeOnComplete: 50,
-          removeOnFail: 25,
-        },
-      },
     ),
   ],
-  providers: [AnalysisProcessor, TrackerStallProcessor, RenewalCheckProcessor, ImplementationProcessor, TokenRefreshProcessor],
+  providers: [
+    AnalysisProcessor,
+    TrackerStallProcessor,
+    RenewalCheckProcessor,
+    ImplementationProcessor,
+    PlanExecutorService,
+  ],
   exports: [BullModule],
 })
 export class QueueModule {}
