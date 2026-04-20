@@ -153,11 +153,21 @@ export class JiraService {
       throw new BadRequestException('Jira is not connected');
     }
 
+    // Atlassian access tokens expire after 1 hour — refresh if needed.
+    let token = connection.accessToken;
+    if (
+      connection.tokenExpiresAt &&
+      new Date() >= connection.tokenExpiresAt &&
+      connection.refreshToken
+    ) {
+      token = await this.refreshToken(connection.id, connection.refreshToken);
+    }
+
     // Jira Cloud needs cloudId from accessible-resources
     let cloudId = connection.externalTeamId;
     if (!cloudId) {
       const resources = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
-        headers: { Authorization: `Bearer ${connection.accessToken}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       const sites = (await resources.json()) as { id: string; name: string }[];
       if (sites.length === 0) throw new BadRequestException('No Jira sites accessible');
@@ -170,7 +180,49 @@ export class JiraService {
       });
     }
 
-    return { token: connection.accessToken, cloudId };
+    return { token, cloudId };
+  }
+
+  private async refreshToken(
+    connectionId: string,
+    refreshToken: string,
+  ): Promise<string> {
+    const response = await fetch('https://auth.atlassian.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        client_id: process.env.JIRA_CLIENT_ID || '',
+        client_secret: process.env.JIRA_CLIENT_SECRET || '',
+        refresh_token: refreshToken,
+      }),
+    });
+
+    if (!response.ok) {
+      await this.prisma.integrationConnection.update({
+        where: { id: connectionId },
+        data: { status: 'EXPIRED' },
+      });
+      throw new BadRequestException('Jira token refresh failed — reconnect');
+    }
+
+    const data = (await response.json()) as {
+      access_token: string;
+      expires_in: number;
+      refresh_token?: string;
+    };
+
+    await this.prisma.integrationConnection.update({
+      where: { id: connectionId },
+      data: {
+        accessToken: data.access_token,
+        ...(data.refresh_token && { refreshToken: data.refresh_token }),
+        tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
+      },
+    });
+
+    this.logger.log(`Refreshed Jira token for connection ${connectionId}`);
+    return data.access_token;
   }
 
   private async request(

@@ -6,6 +6,7 @@ import { AiService } from '../ai';
 import { WebsiteScraperService } from '../onboarding/website-scraper.service';
 import { NotificationsService } from '../notifications';
 import { SlackService } from '../integrations/services/slack.service';
+import { TrackerService } from '../tracker/tracker.service';
 import type { ReportGenerationContext } from '../ai/prompts/report-generation.prompt';
 
 interface ReportGenerationJob {
@@ -36,6 +37,7 @@ export class AnalysisProcessor extends WorkerHost {
     private websiteScraper: WebsiteScraperService,
     private notifications: NotificationsService,
     private slack: SlackService,
+    private tracker: TrackerService,
   ) {
     super();
   }
@@ -98,6 +100,24 @@ export class AnalysisProcessor extends WorkerHost {
         this.logger.log(
           `[${reportId}] Report saved in ${Date.now() - saveStart}ms. Total: ${((Date.now() - start) / 1000).toFixed(1)}s | Value: $${(totalEfficiencyValue + totalGrowthValue).toLocaleString()}`,
         );
+
+        // Auto-seed Tracker actions from the report's recommendations so the
+        // user doesn't need to click "Import to Tracker" after the report
+        // completes. The tracker's importFromReport is idempotent (dedupes by
+        // sourceRecommendationId), so a later manual re-import is safe.
+        try {
+          const importResult = await this.tracker.importFromReport(
+            sessionId,
+            organizationId,
+          );
+          this.logger.log(
+            `[${reportId}] Auto-seeded tracker — imported ${importResult.imported}, skipped ${importResult.skipped}`,
+          );
+        } catch (seedError) {
+          this.logger.warn(
+            `[${reportId}] Auto-seed failed (report still succeeded): ${(seedError as Error).message}`,
+          );
+        }
 
         // Send "report ready" notification
         try {

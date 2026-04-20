@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import type { PlanExecutionSummary } from '../../implementation/plan-executor.service';
 
 interface SlackMessage {
   channel?: string;
@@ -270,20 +271,34 @@ export class SlackService {
     organizationId: string,
     actionTitle: string,
     deployedBy: string,
+    summary?: PlanExecutionSummary,
   ) {
+    const hasFailures = summary && (summary.failed > 0 || summary.skipped > 0);
+    const header = hasFailures ? 'Action Deployed (partial)' : 'Action Deployed';
+    const title = hasFailures ? `Partially deployed: ${actionTitle}` : `Deployed: ${actionTitle}`;
+
+    const fields: SlackBlock['fields'] = [
+      { type: 'mrkdwn', text: `*Action:*\n${actionTitle}` },
+      { type: 'mrkdwn', text: `*Deployed by:*\n${deployedBy}` },
+    ];
+
+    if (summary && summary.total > 0) {
+      const parts = [`${summary.completed}/${summary.total} completed`];
+      if (summary.failed > 0) parts.push(`${summary.failed} failed`);
+      if (summary.skipped > 0) parts.push(`${summary.skipped} skipped`);
+      fields.push({ type: 'mrkdwn', text: `*Steps:*\n${parts.join(', ')}` });
+    }
+
     return this.sendMessage(organizationId, {
-      text: `Deployed: ${actionTitle}`,
+      text: title,
       blocks: [
         {
           type: 'header',
-          text: { type: 'plain_text', text: 'Action Deployed', emoji: true },
+          text: { type: 'plain_text', text: header, emoji: true },
         },
         {
           type: 'section',
-          fields: [
-            { type: 'mrkdwn', text: `*Action:*\n${actionTitle}` },
-            { type: 'mrkdwn', text: `*Deployed by:*\n${deployedBy}` },
-          ],
+          fields,
         },
       ],
     });
@@ -344,6 +359,36 @@ export class SlackService {
           text: {
             type: 'mrkdwn',
             text: `*${actionTitle}*\n\`${oldStatus}\` → \`${newStatus}\``,
+          },
+        },
+      ],
+    });
+  }
+
+  async notifySprintCompleted(
+    organizationId: string,
+    sprintName: string,
+    actionsCompleted: number,
+  ) {
+    return this.sendMessage(organizationId, {
+      text: `Sprint completed: ${sprintName}`,
+      blocks: [
+        {
+          type: 'header',
+          text: { type: 'plain_text', text: 'Sprint Completed', emoji: true },
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `*Sprint:*\n${sprintName}` },
+            { type: 'mrkdwn', text: `*Actions delivered:*\n${actionsCompleted}` },
+          ],
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: 'All actions in this sprint have been deployed or verified. Review outcomes in the Tracker.',
           },
         },
       ],

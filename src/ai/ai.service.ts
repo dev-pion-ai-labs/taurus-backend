@@ -23,6 +23,11 @@ import {
   type SprintSuggestion,
 } from './prompts/sprint-suggestion.prompt';
 import {
+  buildNextActionPrompt,
+  type NextActionSuggestionContext,
+  type NextActionSuggestion,
+} from './prompts/next-action-suggestion.prompt';
+import {
   buildToolOverlapPrompt,
   type ToolOverlapContext,
   type ToolOverlapResult,
@@ -318,6 +323,51 @@ Return a JSON object with this exact structure:
     }
 
     throw new Error('Failed to analyze discovery scan after retries');
+  }
+
+  async suggestNextAction(
+    ctx: NextActionSuggestionContext,
+  ): Promise<NextActionSuggestion> {
+    const { system, user } = buildNextActionPrompt(ctx);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 1024,
+          system,
+          messages: [{ role: 'user', content: user }],
+        });
+
+        const raw =
+          response.content[0].type === 'text' ? response.content[0].text : '';
+        const text = raw
+          .replace(/```json?\s*\n?/gi, '')
+          .replace(/```\s*/gi, '')
+          .trim();
+        const suggestion: NextActionSuggestion = JSON.parse(text);
+
+        if (!suggestion.actionId || !suggestion.reason) {
+          throw new Error('Next-action suggestion missing required fields');
+        }
+
+        const known = new Set(ctx.candidates.map((c) => c.id));
+        if (!known.has(suggestion.actionId)) {
+          throw new Error(
+            `AI returned unknown actionId ${suggestion.actionId}`,
+          );
+        }
+
+        return suggestion;
+      } catch (error) {
+        this.logger.warn(
+          `Next-action suggestion attempt ${attempt + 1} failed: ${(error as Error).message}`,
+        );
+        if (attempt === 2) throw error;
+      }
+    }
+
+    throw new Error('Failed to generate next-action suggestion after retries');
   }
 
   async suggestSprint(

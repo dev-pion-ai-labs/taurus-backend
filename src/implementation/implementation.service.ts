@@ -166,15 +166,18 @@ export class ImplementationService {
       data: { status: 'AWAITING_APPROVAL' },
     });
 
-    // Queue artifact generation
+    // Queue execution directly — the executor runs deploymentSteps against
+    // connected integrations (Jira, Slack, etc.) and flips plan → COMPLETED
+    // and action → DEPLOYED when done. No checklist gate, no intermediate
+    // artifact review step.
     await this.implementationQueue.add(
-      'generate-artifacts',
-      { planId: id, orgId: organizationId },
+      'execute-plan',
+      { planId: id, orgId: organizationId, userId },
       { attempts: 2, backoff: { type: 'exponential', delay: 10000 } },
     );
 
     this.logger.log(
-      `Plan ${id} approved by ${userId}, artifact generation queued`,
+      `Plan ${id} approved by ${userId}, execution queued`,
     );
 
     return { id, status: 'APPROVED' };
@@ -209,34 +212,6 @@ export class ImplementationService {
     this.logger.log(`Plan ${id} rejected`);
 
     return { id, status: 'DRAFT' };
-  }
-
-  // ── Execute (manual artifact generation) ───────────────
-
-  async executePlan(id: string, organizationId: string) {
-    const plan = await this.prisma.deploymentPlan.findFirst({
-      where: { id, organizationId },
-    });
-
-    if (!plan) {
-      throw new NotFoundException('Deployment plan not found');
-    }
-
-    if (plan.status !== 'APPROVED' && plan.status !== 'FAILED') {
-      throw new BadRequestException(
-        `Cannot execute plan in ${plan.status} status — must be APPROVED or FAILED`,
-      );
-    }
-
-    await this.implementationQueue.add(
-      'generate-artifacts',
-      { planId: id, orgId: organizationId },
-      { attempts: 2, backoff: { type: 'exponential', delay: 10000 } },
-    );
-
-    this.logger.log(`Plan ${id} execution queued`);
-
-    return { id, status: 'EXECUTING' };
   }
 
   // ── Artifacts ──────────────────────────────────────────
@@ -316,53 +291,51 @@ export class ImplementationService {
     return { id: artifactId, checklistState: updated, progress: { checked, total } };
   }
 
-  // ── Deploy (manual, after checklists done) ─────────────
+  // ── Deploy (retry endpoint) ────────────────────────────
 
+  /**
+   * Retry execution of a plan. The approve flow already runs execution
+   * automatically, so this endpoint is a retry path for:
+   *   • FAILED plans (whole run crashed)
+   *   • COMPLETED plans that still have non-completed deploymentSteps
+   *     (partial failure — previously-completed steps are skipped by the
+   *     executor, only pending/failed steps re-run)
+   */
   async deployPlan(id: string, organizationId: string, userId: string) {
     const plan = await this.prisma.deploymentPlan.findFirst({
       where: { id, organizationId },
-      include: { artifacts: true },
     });
 
     if (!plan) {
       throw new NotFoundException('Deployment plan not found');
     }
 
-    if (plan.status !== 'COMPLETED') {
+    const deploymentSteps = Array.isArray(plan.deploymentSteps)
+      ? (plan.deploymentSteps as Array<{ status?: string }>)
+      : [];
+    const hasIncompleteSteps = deploymentSteps.some(
+      (s) => !s.status || s.status !== 'completed',
+    );
+
+    const isFailed = plan.status === 'FAILED';
+    const isCompletedWithRemainingWork =
+      plan.status === 'COMPLETED' &&
+      deploymentSteps.length > 0 &&
+      hasIncompleteSteps;
+
+    if (!isFailed && !isCompletedWithRemainingWork) {
       throw new BadRequestException(
-        `Cannot deploy plan in ${plan.status} status — must be COMPLETED`,
+        `Nothing to retry for plan in ${plan.status} status`,
       );
     }
 
-    // Check all integration checklists are fully checked
-    const checklists = plan.artifacts.filter(
-      (a) => a.type === 'INTEGRATION_CHECKLIST',
-    );
-
-    for (const checklist of checklists) {
-      const lines = this.extractChecklistLines(checklist.content);
-      const state = (checklist.checklistState as Record<string, boolean>) || {};
-      const unchecked = lines.filter((idx) => !state[idx]);
-
-      if (unchecked.length > 0) {
-        throw new BadRequestException(
-          `Integration checklist "${checklist.title}" has ${unchecked.length} unchecked item(s) — complete all items before deploying`,
-        );
-      }
-    }
-
-    // Hand off to PlanExecutor via the queue. The job runs deploymentSteps
-    // against the connected integrations, persists per-step results back to
-    // the plan, then marks the tracker action DEPLOYED and notifies Slack.
-    // (For legacy plans with empty deploymentSteps, the executor short-circuits
-    // straight to the mark-deployed step, preserving the old behavior.)
     await this.implementationQueue.add(
       'execute-plan',
       { planId: id, orgId: organizationId, userId },
       { attempts: 2, backoff: { type: 'exponential', delay: 10000 } },
     );
 
-    this.logger.log(`Plan ${id} deployment queued by ${userId}`);
+    this.logger.log(`Plan ${id} retry queued by ${userId}`);
 
     return { id, deployed: true };
   }
