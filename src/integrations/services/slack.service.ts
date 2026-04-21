@@ -22,7 +22,18 @@ export class SlackService {
 
   constructor(private prisma: PrismaService) {}
 
-  /** Send a message to the connected Slack workspace's default channel */
+  /**
+   * Send a message to the connected Slack workspace.
+   *
+   * Return shape is intentionally aligned with other action methods so the
+   * PlanExecutor's {error}-based failure detection can catch problems:
+   *   - success: { ok: true, ts, channel }
+   *   - failure: { error: string }   (also marks the integration EXPIRED on
+   *     token_expired / invalid_auth)
+   *
+   * Fire-and-forget notify* wrappers don't inspect the return value, so they
+   * continue to work unchanged.
+   */
   async sendMessage(organizationId: string, message: SlackMessage) {
     const connection = await this.prisma.integrationConnection.findUnique({
       where: {
@@ -34,7 +45,7 @@ export class SlackService {
       this.logger.debug(
         `Slack not connected for org ${organizationId}, skipping notification`,
       );
-      return null;
+      return { error: 'Slack is not connected for this organization' };
     }
 
     try {
@@ -53,7 +64,12 @@ export class SlackService {
         }),
       });
 
-      const data = await response.json() as { ok: boolean; error?: string };
+      const data = await response.json() as {
+        ok: boolean;
+        error?: string;
+        ts?: string;
+        channel?: string;
+      };
 
       if (!data.ok) {
         this.logger.error(
@@ -68,15 +84,14 @@ export class SlackService {
           });
         }
 
-        return null;
+        return { error: data.error || 'Slack API returned ok=false' };
       }
 
-      return data;
+      return { ok: true, ts: data.ts, channel: data.channel };
     } catch (error) {
-      this.logger.error(
-        `Slack send failed: ${(error as Error).message}`,
-      );
-      return null;
+      const msg = (error as Error).message;
+      this.logger.error(`Slack send failed: ${msg}`);
+      return { error: msg };
     }
   }
 
@@ -148,18 +163,40 @@ export class SlackService {
 
   /** Set channel topic */
   async setChannelTopic(organizationId: string, channelId: string, topic: string) {
-    const token = await this.getConnectionToken(organizationId);
+    let token: string;
+    try {
+      token = await this.getConnectionToken(organizationId);
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
 
-    await fetch('https://slack.com/api/conversations.setTopic', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ channel: channelId, topic }),
-    });
+    try {
+      const response = await fetch(
+        'https://slack.com/api/conversations.setTopic',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ channel: channelId, topic }),
+        },
+      );
 
-    return { channelId, topic };
+      const data = (await response.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        this.logger.error(
+          `Slack setChannelTopic failed for ${channelId}: ${data.error}`,
+        );
+        return { error: data.error || 'Slack API returned ok=false' };
+      }
+
+      return { channelId, topic };
+    } catch (error) {
+      const msg = (error as Error).message;
+      this.logger.error(`Slack setChannelTopic failed: ${msg}`);
+      return { error: msg };
+    }
   }
 
   /** List workspace users */

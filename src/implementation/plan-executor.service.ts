@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma';
 import { IntegrationToolExecutor } from '../ai/tools/integration-tool-executor';
 import { SlackService } from '../integrations/services/slack.service';
+import { TrackerService } from '../tracker/tracker.service';
 import type { DeploymentStepPlan } from '../ai/implementation-ai.service';
 
 export interface PlanExecutionSummary {
@@ -20,6 +21,7 @@ export class PlanExecutorService {
     private prisma: PrismaService,
     private toolExecutor: IntegrationToolExecutor,
     private slack: SlackService,
+    private tracker: TrackerService,
   ) {}
 
   /**
@@ -58,13 +60,14 @@ export class PlanExecutorService {
     this.logger.log(`[${planId}] Executing ${steps.length} deployment step(s)`);
 
     // Flip action to IN_PROGRESS while the executor runs. Final transition to
-    // DEPLOYED happens in markActionDeployed after the loop finishes.
+    // DEPLOYED happens in markActionDeployed after the loop finishes. Mirrors
+    // the timestamp behaviour of TrackerService.moveAction for consistency.
     await this.prisma.transformationAction.updateMany({
       where: {
         id: plan.actionId,
         status: { in: ['AWAITING_APPROVAL', 'THIS_SPRINT', 'BACKLOG'] },
       },
-      data: { status: 'IN_PROGRESS' },
+      data: { status: 'IN_PROGRESS', startedAt: new Date() },
     });
 
     const executed: DeploymentStepPlan[] = steps.map((s) => ({
@@ -303,5 +306,14 @@ export class PlanExecutorService {
     this.slack
       .notifyDeployed(organizationId, action.title, deployerName, summary)
       .catch(() => {});
+
+    // Mirror the sprint auto-complete that fires on manual Kanban drag.
+    await this.tracker
+      .maybeCompleteSprint(actionId, organizationId)
+      .catch((err) =>
+        this.logger.warn(
+          `[${actionId}] Sprint auto-complete check failed: ${(err as Error).message}`,
+        ),
+      );
   }
 }

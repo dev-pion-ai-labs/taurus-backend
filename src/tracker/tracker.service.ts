@@ -200,35 +200,56 @@ export class TrackerService {
     }
 
     // Auto-advance sprint when all actions are DEPLOYED or VERIFIED
-    if (
-      (dto.status === 'DEPLOYED' || dto.status === 'VERIFIED') &&
-      action.sprintId
-    ) {
-      const sprintActions = await this.prisma.transformationAction.findMany({
-        where: { sprintId: action.sprintId },
-        select: { status: true },
-      });
-
-      const allDone = sprintActions.every(
-        (a) => a.status === 'DEPLOYED' || a.status === 'VERIFIED',
-      );
-
-      if (allDone) {
-        const sprint = await this.prisma.sprint.update({
-          where: { id: action.sprintId },
-          data: { status: 'COMPLETED' },
-        });
-        this.logger.log(
-          `Sprint ${action.sprintId} auto-completed — all actions deployed/verified`,
-        );
-
-        this.slack
-          .notifySprintCompleted(organizationId, sprint.name, sprintActions.length)
-          .catch(() => {});
-      }
+    if (dto.status === 'DEPLOYED' || dto.status === 'VERIFIED') {
+      await this.maybeCompleteSprint(actionId, organizationId);
     }
 
     return updated;
+  }
+
+  /**
+   * Marks the action's parent sprint as COMPLETED if every action in the
+   * sprint is now DEPLOYED or VERIFIED. Idempotent: if the sprint isn't
+   * eligible or is already completed, this is a no-op. Called from
+   * moveAction (manual drag-drop) and from PlanExecutorService after a plan
+   * auto-deploys its action, so both paths trigger sprint roll-up.
+   */
+  async maybeCompleteSprint(actionId: string, organizationId: string) {
+    const action = await this.prisma.transformationAction.findUnique({
+      where: { id: actionId },
+      select: { sprintId: true },
+    });
+
+    if (!action?.sprintId) return;
+
+    const sprintActions = await this.prisma.transformationAction.findMany({
+      where: { sprintId: action.sprintId },
+      select: { status: true },
+    });
+
+    const allDone = sprintActions.every(
+      (a) => a.status === 'DEPLOYED' || a.status === 'VERIFIED',
+    );
+
+    if (!allDone) return;
+
+    const sprint = await this.prisma.sprint.findUnique({
+      where: { id: action.sprintId },
+      select: { status: true },
+    });
+    if (!sprint || sprint.status === 'COMPLETED') return;
+
+    const updated = await this.prisma.sprint.update({
+      where: { id: action.sprintId },
+      data: { status: 'COMPLETED' },
+    });
+    this.logger.log(
+      `Sprint ${action.sprintId} auto-completed — all actions deployed/verified`,
+    );
+
+    this.slack
+      .notifySprintCompleted(organizationId, updated.name, sprintActions.length)
+      .catch(() => {});
   }
 
   async deleteAction(actionId: string, organizationId: string) {
