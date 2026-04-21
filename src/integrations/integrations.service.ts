@@ -125,6 +125,14 @@ export class IntegrationsService {
       redirectUri,
     );
 
+    // Guard against silent failures (e.g. Slack returns HTTP 200 with ok:false
+    // and no access_token, which would otherwise persist a broken CONNECTED row).
+    if (!tokenData.accessToken) {
+      throw new BadRequestException(
+        `${provider} connection failed — provider returned no access token. Please retry.`,
+      );
+    }
+
     // Upsert the connection (one per org per provider)
     const connection = await this.prisma.integrationConnection.upsert({
       where: {
@@ -272,9 +280,27 @@ export class IntegrationsService {
   ) {
     switch (provider) {
       case 'SLACK': {
+        // Slack always returns HTTP 200; errors surface as { ok: false, error }.
+        if (data.ok === false) {
+          this.logger.error(
+            `Slack OAuth returned ok:false: ${JSON.stringify(data).slice(0, 300)}`,
+          );
+          throw new BadRequestException(
+            `Slack OAuth failed: ${(data.error as string) || 'unknown error'}`,
+          );
+        }
         const authedUser = data.authed_user as Record<string, unknown> | undefined;
+        const accessToken =
+          (data.access_token as string) || (authedUser?.access_token as string) || '';
+        if (!accessToken) {
+          this.logger.error(
+            `Slack OAuth response missing access_token. Keys present: ${Object.keys(data).join(', ')}. authed_user keys: ${
+              authedUser ? Object.keys(authedUser).join(', ') : '(none)'
+            }`,
+          );
+        }
         return {
-          accessToken: (data.access_token as string) || (authedUser?.access_token as string) || '',
+          accessToken,
           refreshToken: data.refresh_token as string | undefined,
           scope: data.scope as string | undefined,
           teamId: (data.team as Record<string, unknown>)?.id as string | undefined,
