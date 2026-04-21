@@ -70,6 +70,19 @@ export class PlanExecutorService {
       data: { status: 'IN_PROGRESS', startedAt: new Date() },
     });
 
+    // Fire-and-forget Slack "now deploying" ping so the workspace sees the
+    // execution kickoff. The final notifyDeployed message follows when the
+    // run completes.
+    const action = await this.prisma.transformationAction.findUnique({
+      where: { id: plan.actionId },
+      select: { title: true },
+    });
+    if (action) {
+      this.slack
+        .notifyExecutionStarted(organizationId, action.title, steps.length)
+        .catch(() => {});
+    }
+
     const executed: DeploymentStepPlan[] = steps.map((s) => ({
       ...s,
       status: s.status ?? 'pending',

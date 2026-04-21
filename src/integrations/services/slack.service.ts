@@ -304,6 +304,39 @@ export class SlackService {
     });
   }
 
+  async notifyExecutionStarted(
+    organizationId: string,
+    actionTitle: string,
+    stepCount: number,
+  ) {
+    return this.sendMessage(organizationId, {
+      text: `Deploying: ${actionTitle}`,
+      blocks: [
+        {
+          type: 'header',
+          text: { type: 'plain_text', text: 'Deployment Started', emoji: true },
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `*Action:*\n${actionTitle}` },
+            {
+              type: 'mrkdwn',
+              text: `*Steps to run:*\n${stepCount}`,
+            },
+          ],
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: 'Taurus is executing the deployment plan now. You\'ll get a final summary when it finishes.',
+          },
+        },
+      ],
+    });
+  }
+
   async notifyDeployed(
     organizationId: string,
     actionTitle: string,
