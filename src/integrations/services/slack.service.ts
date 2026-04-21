@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import type { PlanExecutionSummary } from '../../implementation/plan-executor.service';
 
 interface SlackMessage {
   channel?: string;
@@ -21,7 +22,18 @@ export class SlackService {
 
   constructor(private prisma: PrismaService) {}
 
-  /** Send a message to the connected Slack workspace's default channel */
+  /**
+   * Send a message to the connected Slack workspace.
+   *
+   * Return shape is intentionally aligned with other action methods so the
+   * PlanExecutor's {error}-based failure detection can catch problems:
+   *   - success: { ok: true, ts, channel }
+   *   - failure: { error: string }   (also marks the integration EXPIRED on
+   *     token_expired / invalid_auth)
+   *
+   * Fire-and-forget notify* wrappers don't inspect the return value, so they
+   * continue to work unchanged.
+   */
   async sendMessage(organizationId: string, message: SlackMessage) {
     const connection = await this.prisma.integrationConnection.findUnique({
       where: {
@@ -33,7 +45,7 @@ export class SlackService {
       this.logger.debug(
         `Slack not connected for org ${organizationId}, skipping notification`,
       );
-      return null;
+      return { error: 'Slack is not connected for this organization' };
     }
 
     try {
@@ -52,7 +64,12 @@ export class SlackService {
         }),
       });
 
-      const data = await response.json() as { ok: boolean; error?: string };
+      const data = await response.json() as {
+        ok: boolean;
+        error?: string;
+        ts?: string;
+        channel?: string;
+      };
 
       if (!data.ok) {
         this.logger.error(
@@ -67,15 +84,14 @@ export class SlackService {
           });
         }
 
-        return null;
+        return { error: data.error || 'Slack API returned ok=false' };
       }
 
-      return data;
+      return { ok: true, ts: data.ts, channel: data.channel };
     } catch (error) {
-      this.logger.error(
-        `Slack send failed: ${(error as Error).message}`,
-      );
-      return null;
+      const msg = (error as Error).message;
+      this.logger.error(`Slack send failed: ${msg}`);
+      return { error: msg };
     }
   }
 
@@ -147,18 +163,40 @@ export class SlackService {
 
   /** Set channel topic */
   async setChannelTopic(organizationId: string, channelId: string, topic: string) {
-    const token = await this.getConnectionToken(organizationId);
+    let token: string;
+    try {
+      token = await this.getConnectionToken(organizationId);
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
 
-    await fetch('https://slack.com/api/conversations.setTopic', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ channel: channelId, topic }),
-    });
+    try {
+      const response = await fetch(
+        'https://slack.com/api/conversations.setTopic',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ channel: channelId, topic }),
+        },
+      );
 
-    return { channelId, topic };
+      const data = (await response.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        this.logger.error(
+          `Slack setChannelTopic failed for ${channelId}: ${data.error}`,
+        );
+        return { error: data.error || 'Slack API returned ok=false' };
+      }
+
+      return { channelId, topic };
+    } catch (error) {
+      const msg = (error as Error).message;
+      this.logger.error(`Slack setChannelTopic failed: ${msg}`);
+      return { error: msg };
+    }
   }
 
   /** List workspace users */
@@ -266,24 +304,71 @@ export class SlackService {
     });
   }
 
-  async notifyDeployed(
+  async notifyExecutionStarted(
     organizationId: string,
     actionTitle: string,
-    deployedBy: string,
+    stepCount: number,
   ) {
     return this.sendMessage(organizationId, {
-      text: `Deployed: ${actionTitle}`,
+      text: `Deploying: ${actionTitle}`,
       blocks: [
         {
           type: 'header',
-          text: { type: 'plain_text', text: 'Action Deployed', emoji: true },
+          text: { type: 'plain_text', text: 'Deployment Started', emoji: true },
         },
         {
           type: 'section',
           fields: [
             { type: 'mrkdwn', text: `*Action:*\n${actionTitle}` },
-            { type: 'mrkdwn', text: `*Deployed by:*\n${deployedBy}` },
+            {
+              type: 'mrkdwn',
+              text: `*Steps to run:*\n${stepCount}`,
+            },
           ],
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: 'Taurus is executing the deployment plan now. You\'ll get a final summary when it finishes.',
+          },
+        },
+      ],
+    });
+  }
+
+  async notifyDeployed(
+    organizationId: string,
+    actionTitle: string,
+    deployedBy: string,
+    summary?: PlanExecutionSummary,
+  ) {
+    const hasFailures = summary && (summary.failed > 0 || summary.skipped > 0);
+    const header = hasFailures ? 'Action Deployed (partial)' : 'Action Deployed';
+    const title = hasFailures ? `Partially deployed: ${actionTitle}` : `Deployed: ${actionTitle}`;
+
+    const fields: SlackBlock['fields'] = [
+      { type: 'mrkdwn', text: `*Action:*\n${actionTitle}` },
+      { type: 'mrkdwn', text: `*Deployed by:*\n${deployedBy}` },
+    ];
+
+    if (summary && summary.total > 0) {
+      const parts = [`${summary.completed}/${summary.total} completed`];
+      if (summary.failed > 0) parts.push(`${summary.failed} failed`);
+      if (summary.skipped > 0) parts.push(`${summary.skipped} skipped`);
+      fields.push({ type: 'mrkdwn', text: `*Steps:*\n${parts.join(', ')}` });
+    }
+
+    return this.sendMessage(organizationId, {
+      text: title,
+      blocks: [
+        {
+          type: 'header',
+          text: { type: 'plain_text', text: header, emoji: true },
+        },
+        {
+          type: 'section',
+          fields,
         },
       ],
     });
@@ -344,6 +429,36 @@ export class SlackService {
           text: {
             type: 'mrkdwn',
             text: `*${actionTitle}*\n\`${oldStatus}\` → \`${newStatus}\``,
+          },
+        },
+      ],
+    });
+  }
+
+  async notifySprintCompleted(
+    organizationId: string,
+    sprintName: string,
+    actionsCompleted: number,
+  ) {
+    return this.sendMessage(organizationId, {
+      text: `Sprint completed: ${sprintName}`,
+      blocks: [
+        {
+          type: 'header',
+          text: { type: 'plain_text', text: 'Sprint Completed', emoji: true },
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `*Sprint:*\n${sprintName}` },
+            { type: 'mrkdwn', text: `*Actions delivered:*\n${actionsCompleted}` },
+          ],
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: 'All actions in this sprint have been deployed or verified. Review outcomes in the Tracker.',
           },
         },
       ],

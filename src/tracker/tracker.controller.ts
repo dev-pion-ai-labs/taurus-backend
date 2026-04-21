@@ -187,6 +187,16 @@ export class TrackerController {
     return this.trackerService.suggestSprint(user.organizationId);
   }
 
+  // ── AI Next-Action Suggestion ──────────────────────────
+
+  @Get('next-action/suggest')
+  suggestNextAction(
+    @CurrentUser() user: { organizationId: string | null },
+  ) {
+    this.requireOrg(user.organizationId);
+    return this.trackerService.suggestNextAction(user.organizationId);
+  }
+
   // ── Helper ──────────────────────────────────────────────
 
   private requireOrg(orgId: string | null): asserts orgId is string {

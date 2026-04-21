@@ -72,12 +72,26 @@ export class ImplementationProcessor extends WorkerHost {
     const start = Date.now();
     this.logger.log(`[${data.planId}] Starting plan execution`);
 
+    await this.prisma.deploymentPlan.update({
+      where: { id: data.planId },
+      data: { status: 'EXECUTING' },
+    });
+
     try {
       const summary = await this.planExecutor.execute(
         data.planId,
         data.orgId,
         data.userId,
       );
+
+      const allSucceeded = summary.failed === 0 && summary.skipped === 0;
+      await this.prisma.deploymentPlan.update({
+        where: { id: data.planId },
+        data: {
+          status: allSucceeded ? 'COMPLETED' : 'FAILED',
+          completedAt: allSucceeded ? new Date() : undefined,
+        },
+      });
 
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
       this.logger.log(
@@ -87,6 +101,10 @@ export class ImplementationProcessor extends WorkerHost {
       this.logger.error(
         `[${data.planId}] Plan execution crashed: ${(error as Error).message}`,
       );
+      await this.prisma.deploymentPlan.update({
+        where: { id: data.planId },
+        data: { status: 'FAILED' },
+      });
       throw error;
     }
   }
@@ -186,97 +204,76 @@ export class ImplementationProcessor extends WorkerHost {
     }
   }
 
+  /**
+   * Opt-in only: generates the artifact types listed on plan.suggestedArtifacts.
+   * Not part of the approve→execute critical path anymore. Invoked only when
+   * the plan explicitly requests artifacts (e.g. INTEGRATION_CHECKLIST for a
+   * high-risk rollout). If suggestedArtifacts is empty, the handler no-ops —
+   * it never mutates plan/action status, so it's safe to run alongside or
+   * after execution.
+   */
   private async handleGenerateArtifacts(data: GenerateArtifactsJob) {
     const start = Date.now();
-    this.logger.log(`[${data.planId}] Starting artifact generation`);
 
-    try {
-      await this.prisma.deploymentPlan.update({
-        where: { id: data.planId },
-        data: { status: 'EXECUTING' },
-      });
+    const plan = await this.prisma.deploymentPlan.findUniqueOrThrow({
+      where: { id: data.planId },
+      include: {
+        action: true,
+        organization: { include: { industry: true } },
+      },
+    });
 
-      const plan = await this.prisma.deploymentPlan.findUniqueOrThrow({
-        where: { id: data.planId },
-        include: {
-          action: true,
-          organization: { include: { industry: true } },
+    const artifactTypes = (plan.suggestedArtifacts as ArtifactType[]) ?? [];
+    if (artifactTypes.length === 0) {
+      this.logger.log(
+        `[${data.planId}] No suggested artifacts — skipping generation`,
+      );
+      return;
+    }
+
+    this.logger.log(
+      `[${data.planId}] Starting opt-in artifact generation (${artifactTypes.length})`,
+    );
+
+    const artifactContext: ArtifactGenerationContext = {
+      planTitle: plan.title,
+      planSummary: plan.summary,
+      planSteps: plan.steps,
+      planPrerequisites: plan.prerequisites,
+      planRisks: plan.risks,
+      actionTitle: plan.action.title,
+      actionDescription: plan.action.description,
+      actionDepartment: plan.action.department,
+      organizationName: plan.organization.name,
+      industry: plan.organization.industry?.name || 'Unknown',
+    };
+
+    for (let i = 0; i < artifactTypes.length; i++) {
+      const type = artifactTypes[i];
+      this.logger.log(
+        `[${data.planId}] Generating artifact ${i + 1}/${artifactTypes.length}: ${type}`,
+      );
+
+      const artifact = await this.implementationAi.generateArtifact(
+        type,
+        artifactContext,
+      );
+
+      await this.prisma.deploymentArtifact.create({
+        data: {
+          planId: data.planId,
+          type,
+          title: artifact.title,
+          content: artifact.content,
+          orderIndex: i,
         },
       });
-
-      const artifactTypes = (plan.suggestedArtifacts as ArtifactType[]) || [
-        'IMPLEMENTATION_GUIDE',
-        'INTEGRATION_CHECKLIST',
-      ];
-
-      const artifactContext: ArtifactGenerationContext = {
-        planTitle: plan.title,
-        planSummary: plan.summary,
-        planSteps: plan.steps,
-        planPrerequisites: plan.prerequisites,
-        planRisks: plan.risks,
-        actionTitle: plan.action.title,
-        actionDescription: plan.action.description,
-        actionDepartment: plan.action.department,
-        organizationName: plan.organization.name,
-        industry: plan.organization.industry?.name || 'Unknown',
-      };
-
-      // Generate each artifact sequentially to avoid rate limiting
-      for (let i = 0; i < artifactTypes.length; i++) {
-        const type = artifactTypes[i];
-        this.logger.log(
-          `[${data.planId}] Generating artifact ${i + 1}/${artifactTypes.length}: ${type}`,
-        );
-
-        const artifact = await this.implementationAi.generateArtifact(
-          type,
-          artifactContext,
-        );
-
-        await this.prisma.deploymentArtifact.create({
-          data: {
-            planId: data.planId,
-            type,
-            title: artifact.title,
-            content: artifact.content,
-            orderIndex: i,
-          },
-        });
-      }
-
-      // Mark plan as completed
-      await this.prisma.deploymentPlan.update({
-        where: { id: data.planId },
-        data: { status: 'COMPLETED', completedAt: new Date() },
-      });
-
-      // Advance action to IN_PROGRESS — it only moves to DEPLOYED
-      // when the user completes the integration checklist and triggers deploy
-      await this.prisma.transformationAction.update({
-        where: { id: plan.actionId },
-        data: { status: 'IN_PROGRESS' },
-      });
-
-      // Notify Slack
-      this.slack
-        .notifyArtifactsReady(data.orgId, plan.title, artifactTypes.length)
-        .catch(() => {}); // fire-and-forget
-
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      this.logger.log(
-        `[${data.planId}] Artifact generation completed in ${elapsed}s — ${artifactTypes.length} artifacts`,
-      );
-    } catch (error) {
-      this.logger.error(
-        `[${data.planId}] Artifact generation failed: ${(error as Error).message}`,
-      );
-      await this.prisma.deploymentPlan.update({
-        where: { id: data.planId },
-        data: { status: 'FAILED' },
-      });
-      throw error;
     }
+
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    this.logger.log(
+      `[${data.planId}] Artifact generation completed in ${elapsed}s — ${artifactTypes.length} artifacts`,
+    );
   }
 
   private async savePlan(

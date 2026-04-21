@@ -103,15 +103,6 @@ export class ImplementationController {
     );
   }
 
-  @Post('plans/:id/execute')
-  executePlan(
-    @CurrentUser() user: { organizationId: string | null },
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
-    this.requireOrg(user.organizationId);
-    return this.implementationService.executePlan(id, user.organizationId);
-  }
-
   // ── Artifacts ──────────────────────────────────────────
 
   @Get('plans/:id/artifacts')
@@ -148,7 +139,9 @@ export class ImplementationController {
     );
   }
 
-  // ── Deploy ────────────────────────────────────────────
+  // ── Deploy (retry) ────────────────────────────────────
+  // Approval triggers execution automatically. This endpoint re-runs the
+  // executor for FAILED plans or COMPLETED plans with partial-failure steps.
 
   @Post('plans/:id/deploy')
   deployPlan(

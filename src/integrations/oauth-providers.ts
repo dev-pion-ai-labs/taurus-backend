@@ -29,7 +29,12 @@ export const OAUTH_PROVIDERS: Partial<Record<IntegrationProvider, OAuthProviderC
   JIRA: {
     authorizeUrl: 'https://auth.atlassian.com/authorize',
     tokenUrl: 'https://auth.atlassian.com/oauth/token',
-    scopes: ['read:jira-work', 'write:jira-work', 'read:jira-user'],
+    scopes: [
+      'read:jira-work',
+      'write:jira-work',
+      'read:jira-user',
+      'offline_access',
+    ],
     clientIdEnv: 'JIRA_CLIENT_ID',
     clientSecretEnv: 'JIRA_CLIENT_SECRET',
   },

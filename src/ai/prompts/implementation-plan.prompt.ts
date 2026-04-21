@@ -54,7 +54,7 @@ Your output MUST be a valid JSON object with this exact structure:
     }
   ],
   "estimatedDuration": "Total estimated duration, e.g., 4-6 weeks",
-  "suggestedArtifacts": ["IMPLEMENTATION_GUIDE", "CONFIGURATION_TEMPLATE", "INTEGRATION_CHECKLIST", "VENDOR_EVALUATION", "CODE_SNIPPET"],
+  "suggestedArtifacts": [],
   "actionsExecuted": ["List of what the AI actually did inline — e.g., Created Slack channel #ai-alerts, Created Jira ticket PROJ-45"],
   "deploymentSteps": [
     {
@@ -67,11 +67,14 @@ Your output MUST be a valid JSON object with this exact structure:
   ]
 }
 
-The "deploymentSteps" array is the machine-executable plan that the PlanExecutor will run when the user clicks Deploy. Rules for deploymentSteps:
+"suggestedArtifacts" defaults to an empty array. The approve flow runs deploymentSteps directly — no artifacts are needed for integrations to execute. Only list an artifact type (e.g. INTEGRATION_CHECKLIST) when the plan involves significant manual work that genuinely needs a written checklist for the user. Valid types: IMPLEMENTATION_GUIDE, CONFIGURATION_TEMPLATE, INTEGRATION_CHECKLIST, VENDOR_EVALUATION, CODE_SNIPPET.
+
+The "deploymentSteps" array is the machine-executable plan that the PlanExecutor will run automatically when the user approves the plan. Rules for deploymentSteps:
 - Each step's "tool" MUST be one of the exact INTEGRATION_TOOLS tool names (e.g., jira_create_issue, slack_send_message, notion_create_page, gdrive_create_document, hubspot_create_contact, hubspot_create_deal, salesforce_create_record, slack_create_channel, slack_set_channel_topic, notion_create_database, jira_transition_issue, jira_add_comment).
 - "provider" MUST match the tool's provider (e.g., jira_* → JIRA).
 - "params" MUST exactly match the tool's input_schema — the PlanExecutor will pass it verbatim.
-- "dependsOn" is a zero-indexed array of earlier deploymentSteps indices; use it when a later step needs the output of an earlier one (e.g., a Slack message into a channel this plan creates).
+- "dependsOn" is a zero-indexed array of earlier deploymentSteps indices; use it when a later step needs the output of an earlier one (e.g., a Slack message into a channel this plan creates). If any listed dependency fails at deploy time, the PlanExecutor will automatically skip this step with status "skipped".
+- To reference an earlier step's result inside "params", use the template string "{{steps[N].result.PATH}}" — N is the zero-indexed step, PATH is a dotted path into the result object. Example: step 0 calls slack_create_channel (returns { "channelId": "C123" }); step 1 can then use { "channel": "{{steps[0].result.channelId}}", "text": "Welcome!" }. Always pair this with "dependsOn": [N] so execution is guarded if the upstream step fails.
 - Only include a step in deploymentSteps if the provider is CONNECTED for this org (per get_connected_integrations). If not connected, describe it as a manual step instead.
 - If the plan has no automatable steps, return "deploymentSteps": [].
 - Read-only tools (list_*, search, query) should NOT appear in deploymentSteps — they're for your planning use only.

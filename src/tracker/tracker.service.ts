@@ -17,6 +17,13 @@ import {
 } from './dto';
 import { ActionStatus, Prisma } from '@prisma/client';
 import { AiService } from '../ai';
+import { SlackService } from '../integrations';
+
+const NOTIFIABLE_STATUSES: ActionStatus[] = [
+  'AWAITING_APPROVAL',
+  'DEPLOYED',
+  'VERIFIED',
+];
 
 @Injectable()
 export class TrackerService {
@@ -25,6 +32,7 @@ export class TrackerService {
   constructor(
     private prisma: PrismaService,
     private aiService: AiService,
+    private slack: SlackService,
   ) {}
 
   // ── Board ───────────────────────────────────────────────
@@ -117,9 +125,9 @@ export class TrackerService {
     organizationId: string,
     dto: UpdateActionDto,
   ) {
-    await this.findActionOrFail(actionId, organizationId);
+    const before = await this.findActionOrFail(actionId, organizationId);
 
-    return this.prisma.transformationAction.update({
+    const updated = await this.prisma.transformationAction.update({
       where: { id: actionId },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
@@ -140,6 +148,18 @@ export class TrackerService {
         assignee: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
     });
+
+    if (
+      dto.status !== undefined &&
+      before.status !== updated.status &&
+      NOTIFIABLE_STATUSES.includes(updated.status)
+    ) {
+      this.slack
+        .notifyActionStatusChange(organizationId, updated.title, before.status, updated.status)
+        .catch(() => {});
+    }
+
+    return updated;
   }
 
   async moveAction(
@@ -169,32 +189,67 @@ export class TrackerService {
       },
     });
 
-    // Auto-advance sprint when all actions are DEPLOYED or VERIFIED
+    const newStatus = dto.status as ActionStatus;
     if (
-      (dto.status === 'DEPLOYED' || dto.status === 'VERIFIED') &&
-      action.sprintId
+      action.status !== newStatus &&
+      NOTIFIABLE_STATUSES.includes(newStatus)
     ) {
-      const sprintActions = await this.prisma.transformationAction.findMany({
-        where: { sprintId: action.sprintId },
-        select: { status: true },
-      });
+      this.slack
+        .notifyActionStatusChange(organizationId, action.title, action.status, newStatus)
+        .catch(() => {});
+    }
 
-      const allDone = sprintActions.every(
-        (a) => a.status === 'DEPLOYED' || a.status === 'VERIFIED',
-      );
-
-      if (allDone) {
-        await this.prisma.sprint.update({
-          where: { id: action.sprintId },
-          data: { status: 'COMPLETED' },
-        });
-        this.logger.log(
-          `Sprint ${action.sprintId} auto-completed — all actions deployed/verified`,
-        );
-      }
+    // Auto-advance sprint when all actions are DEPLOYED or VERIFIED
+    if (dto.status === 'DEPLOYED' || dto.status === 'VERIFIED') {
+      await this.maybeCompleteSprint(actionId, organizationId);
     }
 
     return updated;
+  }
+
+  /**
+   * Marks the action's parent sprint as COMPLETED if every action in the
+   * sprint is now DEPLOYED or VERIFIED. Idempotent: if the sprint isn't
+   * eligible or is already completed, this is a no-op. Called from
+   * moveAction (manual drag-drop) and from PlanExecutorService after a plan
+   * auto-deploys its action, so both paths trigger sprint roll-up.
+   */
+  async maybeCompleteSprint(actionId: string, organizationId: string) {
+    const action = await this.prisma.transformationAction.findUnique({
+      where: { id: actionId },
+      select: { sprintId: true },
+    });
+
+    if (!action?.sprintId) return;
+
+    const sprintActions = await this.prisma.transformationAction.findMany({
+      where: { sprintId: action.sprintId },
+      select: { status: true },
+    });
+
+    const allDone = sprintActions.every(
+      (a) => a.status === 'DEPLOYED' || a.status === 'VERIFIED',
+    );
+
+    if (!allDone) return;
+
+    const sprint = await this.prisma.sprint.findUnique({
+      where: { id: action.sprintId },
+      select: { status: true },
+    });
+    if (!sprint || sprint.status === 'COMPLETED') return;
+
+    const updated = await this.prisma.sprint.update({
+      where: { id: action.sprintId },
+      data: { status: 'COMPLETED' },
+    });
+    this.logger.log(
+      `Sprint ${action.sprintId} auto-completed — all actions deployed/verified`,
+    );
+
+    this.slack
+      .notifySprintCompleted(organizationId, updated.name, sprintActions.length)
+      .catch(() => {});
   }
 
   async deleteAction(actionId: string, organizationId: string) {
@@ -418,6 +473,82 @@ export class TrackerService {
       },
       orderBy: { updatedAt: 'asc' },
     });
+  }
+
+  // ── AI Next-Action Suggestion ──────────────────────────
+
+  async suggestNextAction(organizationId: string) {
+    const [candidates, inProgressCount, awaitingApprovalCount, org] =
+      await Promise.all([
+        this.prisma.transformationAction.findMany({
+          where: {
+            organizationId,
+            status: { in: ['BACKLOG', 'THIS_SPRINT'] },
+          },
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            department: true,
+            priority: true,
+            estimatedValue: true,
+            estimatedEffort: true,
+            phase: true,
+            status: true,
+          },
+          orderBy: [{ phase: 'asc' }, { orderIndex: 'asc' }],
+        }),
+        this.prisma.transformationAction.count({
+          where: { organizationId, status: 'IN_PROGRESS' },
+        }),
+        this.prisma.transformationAction.count({
+          where: { organizationId, status: 'AWAITING_APPROVAL' },
+        }),
+        this.prisma.organization.findUniqueOrThrow({
+          where: { id: organizationId },
+          include: { industry: true },
+        }),
+      ]);
+
+    if (candidates.length === 0) {
+      return {
+        suggestion: null as null,
+        message:
+          'No actions available to start. Import from a report or create actions first.',
+      };
+    }
+
+    const ai = await this.aiService.suggestNextAction({
+      candidates: candidates.map((c) => ({
+        id: c.id,
+        title: c.title,
+        description: c.description,
+        department: c.department,
+        priority: c.priority,
+        estimatedValue: c.estimatedValue,
+        estimatedEffort: c.estimatedEffort,
+        phase: c.phase,
+        status: c.status,
+      })),
+      inProgressCount,
+      awaitingApprovalCount,
+      orgName: org.name,
+      industry: org.industry.name,
+    });
+
+    const action = candidates.find((c) => c.id === ai.actionId);
+    if (!action) {
+      throw new NotFoundException(
+        'AI suggested an action that no longer exists',
+      );
+    }
+
+    return {
+      suggestion: {
+        action,
+        reason: ai.reason,
+      },
+    };
   }
 
   // ── AI Sprint Suggestion ───────────────────────────────
