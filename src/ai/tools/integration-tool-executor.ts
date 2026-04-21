@@ -165,10 +165,23 @@ export class IntegrationToolExecutor {
       select: { provider: true, externalTeamName: true },
     });
 
+    const siteUrl = (c: { provider: string; externalTeamName: string | null }): string | null => {
+      if (!c.externalTeamName) return null;
+      switch (c.provider) {
+        case 'JIRA':
+          return `https://${c.externalTeamName}.atlassian.net`;
+        case 'SLACK':
+          return `https://${c.externalTeamName}.slack.com`;
+        default:
+          return null;
+      }
+    };
+
     return {
       connected: connections.map((c) => ({
         provider: c.provider,
         teamName: c.externalTeamName,
+        siteUrl: siteUrl(c),
       })),
       availableTools: connections.flatMap((c) => {
         switch (c.provider) {
