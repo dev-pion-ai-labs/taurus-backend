@@ -169,7 +169,16 @@ export class JiraService {
       const resources = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const sites = (await resources.json()) as { id: string; name: string }[];
+      const raw = (await resources.json()) as unknown;
+      if (!Array.isArray(raw)) {
+        this.logger.error(
+          `Jira accessible-resources returned non-array (${resources.status}): ${JSON.stringify(raw).slice(0, 200)}`,
+        );
+        throw new BadRequestException(
+          `Jira connection is invalid — reconnect (HTTP ${resources.status})`,
+        );
+      }
+      const sites = raw as { id: string; name: string }[];
       if (sites.length === 0) throw new BadRequestException('No Jira sites accessible');
       cloudId = sites[0].id;
 
