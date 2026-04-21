@@ -50,30 +50,56 @@ export class SlackService {
 
     try {
       const channel = message.channel || await this.getDefaultChannel(connection.accessToken);
+      if (!channel) {
+        this.logger.error(
+          `Slack message failed for org ${organizationId}: no channel the bot is a member of`,
+        );
+        return {
+          error:
+            'Slack bot is not a member of any channel — invite it with /invite @<bot> in the target channel or add the chat:write.public scope.',
+        };
+      }
 
-      const response = await fetch('https://slack.com/api/chat.postMessage', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${connection.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          channel,
-          text: message.text,
-          blocks: message.blocks,
-        }),
-      });
+      const post = async () =>
+        fetch('https://slack.com/api/chat.postMessage', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${connection.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            channel,
+            text: message.text,
+            blocks: message.blocks,
+          }),
+        });
 
-      const data = await response.json() as {
+      let response = await post();
+      let data = await response.json() as {
         ok: boolean;
         error?: string;
         ts?: string;
         channel?: string;
       };
 
+      // If the bot isn't in the channel, try to join it and retry once.
+      // Requires channels:join scope; if it's missing we fall through to the
+      // normal error path with a clearer hint.
+      if (!data.ok && data.error === 'not_in_channel') {
+        const joined = await this.tryJoinChannel(connection.accessToken, channel);
+        if (joined) {
+          response = await post();
+          data = await response.json() as typeof data;
+        }
+      }
+
       if (!data.ok) {
+        const hint =
+          data.error === 'not_in_channel'
+            ? ` — invite the bot with "/invite @<bot>" in that channel, or add the chat:write.public scope`
+            : '';
         this.logger.error(
-          `Slack message failed for org ${organizationId}: ${data.error}`,
+          `Slack message failed for org ${organizationId}: ${data.error}${hint}`,
         );
 
         // Mark as expired if token issue
@@ -95,27 +121,55 @@ export class SlackService {
     }
   }
 
-  /** Get the first public channel the bot is in */
-  private async getDefaultChannel(token: string): Promise<string> {
+  /** Get the id of the first public channel the bot is actually a member of. */
+  private async getDefaultChannel(token: string): Promise<string | null> {
     try {
       const response = await fetch(
-        'https://slack.com/api/conversations.list?types=public_channel&limit=1',
+        'https://slack.com/api/conversations.list?types=public_channel&exclude_archived=true&limit=200',
         {
           headers: { Authorization: `Bearer ${token}` },
         },
       );
       const data = await response.json() as {
         ok: boolean;
-        channels?: { id: string }[];
+        channels?: { id: string; name: string; is_member?: boolean }[];
       };
 
-      if (data.ok && data.channels?.[0]) {
-        return data.channels[0].id;
+      if (!data.ok || !data.channels) return null;
+
+      const memberChannel = data.channels.find((c) => c.is_member);
+      if (memberChannel) return memberChannel.id;
+
+      // No membership anywhere. Try to join #general as a last resort.
+      const general = data.channels.find((c) => c.name === 'general');
+      if (general && (await this.tryJoinChannel(token, general.id))) {
+        return general.id;
       }
     } catch {
       // Fall through
     }
-    return 'general';
+    return null;
+  }
+
+  /** Best-effort conversations.join; returns true on success. */
+  private async tryJoinChannel(token: string, channelId: string): Promise<boolean> {
+    try {
+      const response = await fetch('https://slack.com/api/conversations.join', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ channel: channelId }),
+      });
+      const data = await response.json() as { ok: boolean; error?: string };
+      if (!data.ok) {
+        this.logger.debug(`Slack conversations.join(${channelId}) failed: ${data.error}`);
+      }
+      return data.ok;
+    } catch {
+      return false;
+    }
   }
 
   // ── Action Methods ─────────────────────────────────────
