@@ -12,7 +12,16 @@ export const OAUTH_PROVIDERS: Partial<Record<IntegrationProvider, OAuthProviderC
   SLACK: {
     authorizeUrl: 'https://slack.com/oauth/v2/authorize',
     tokenUrl: 'https://slack.com/api/oauth.v2.access',
-    scopes: ['channels:read', 'chat:write', 'users:read'],
+    scopes: [
+      'channels:read',
+      'channels:join',
+      'channels:manage',
+      'groups:read',
+      'groups:write',
+      'chat:write',
+      'chat:write.public',
+      'users:read',
+    ],
     clientIdEnv: 'SLACK_CLIENT_ID',
     clientSecretEnv: 'SLACK_CLIENT_SECRET',
   },
