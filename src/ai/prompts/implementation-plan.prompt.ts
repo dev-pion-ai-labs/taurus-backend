@@ -28,6 +28,12 @@ WORKFLOW:
 
 IMPORTANT: When an action tool fails, include the step as a manual step in the plan instead. Don't fail the entire plan because one tool call failed.
 
+LINKS IN NOTIFICATIONS: When composing Slack messages, Notion content, or other user-facing text that references another system (Jira board, Jira issue, Slack channel), always include a full clickable URL — never just "go to Jira" or "check the KAN project". Use the siteUrl field from get_connected_integrations to build URLs:
+  - Jira board:  {siteUrl}/jira/software/projects/{PROJECT_KEY}/board
+  - Jira issue:  {siteUrl}/browse/{ISSUE_KEY}            (e.g. https://pionailabs-team.atlassian.net/browse/KAN-12)
+  - Jira filter by label:  {siteUrl}/issues/?jql=labels%20%3D%20%22{label}%22
+After a jira_create_issue step completes, later steps can reference the resulting issue URL via "{{steps[N].result.self}}" or by building the browse URL from "{{steps[N].result.key}}".
+
 CRITICAL: When you are done using tools and ready to produce the plan, your ENTIRE response must be a single valid JSON object. Do NOT include any text before or after the JSON. Do NOT say "here is the plan" or "I now have" or any other preamble. Just output the JSON.
 
 Your output MUST be a valid JSON object with this exact structure:
