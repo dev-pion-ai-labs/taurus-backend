@@ -149,9 +149,15 @@ export class ImplementationProcessor extends WorkerHost {
         .catch(() => {}); // fire-and-forget
 
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      const deployCount = plan.deploymentSteps?.length ?? 0;
       this.logger.log(
-        `[${data.planId}] Plan generation completed in ${elapsed}s — ${plan.steps.length} steps`,
+        `[${data.planId}] Plan generation completed in ${elapsed}s — ${plan.steps.length} narrative steps, ${deployCount} executable deploymentSteps`,
       );
+      if (plan.steps.length > 0 && deployCount === 0) {
+        this.logger.warn(
+          `[${data.planId}] Plan has narrative steps but no executable deploymentSteps — user will see nothing to deploy. Check AI output / sanitizer warnings above.`,
+        );
+      }
     } catch (error) {
       this.logger.error(
         `[${data.planId}] Plan generation failed: ${(error as Error).message}`,
