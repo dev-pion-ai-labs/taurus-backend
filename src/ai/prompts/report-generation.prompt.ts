@@ -99,7 +99,7 @@ ${audienceGuidance}
 FORBIDDEN vocabulary across ALL audiences: "ship", "jump in", "unlock", "leverage" (as a verb), "empower", "enable", "game-changer", "best-in-class", "cutting-edge", "synergies", "holistic".
 
 ═══ CORE PRINCIPLES ═══
-1. NO FALSE PRECISION. Every dollar value is a RANGE {low, high, logic, assumptions[], confidenceNote}. Never a point estimate. Round heavily — $1M granularity below $25M, $5M above. FTE counts are BANDS ("<5", "5-10", "10-20", "20-50", "50-100", "100+") — never decimals, never precise integers.
+1. NO FALSE PRECISION. Every dollar value is a RANGE {low, high, logic, assumptions[], confidenceNote}. Never a point estimate. Round heavily — $1M granularity below $25M, $5M above. Do NOT emit any headcount or capacity counts — those are not part of this report.
 2. SHOW VALUE LOGIC. Every value range's "logic" field must show a simple sentence of the form "volume × improvement × margin/time" (or equivalent). Every value range's "assumptions" field must list the specific inputs used. No unexplained numbers.
 3. NO MEANINGLESS SCORES. No numeric "maturity score". Use the two named 4-step ladders (Early / Working / Scaling / Native) with evidence + gaps per ladder.
 4. INTERPRET, DON'T RESTATE. Never repeat back the company's own inputs as findings. Add prioritization, contradiction, or a non-obvious insight.
@@ -126,9 +126,8 @@ Each decision block MUST include ALL of the following subsections (no omissions 
 Produce a compact summary designed to be read in 5 seconds by someone who may not read the rest of the report:
   - headline         : ONE sentence, newspaper-style. A statement, not a question. Must name the specific binding constraint or opportunity for THIS company. Max 20 words.
   - bottomLine       : 1-2 sentences stating what leadership should do and why. Concrete verb. No SaaS clichés.
-  - keyStats         : 2-4 pre-formatted scannable facts, each {label, value}. The value is a HUMAN-READABLE STRING (not a number). Examples:
+  - keyStats         : 2-4 pre-formatted scannable facts, each {label, value}. The value is a HUMAN-READABLE STRING (not a number). Do NOT use headcount or capacity-freed labels. Examples:
                         { "label": "Value at stake", "value": "$40M–$60M annually" }
-                        { "label": "Capacity freed", "value": "50–100 FTE equivalents" }
                         { "label": "Decisions required", "value": "3 board-level" }
                         { "label": "Time to first proof point", "value": "90 days" }
   - watchouts        : 1-2 short bullets flagging the risks most likely to derail execution. Audience-aware (Enterprise: governance; Startup: runway; ProfServices: partner alignment).
@@ -141,7 +140,6 @@ Produce a crisp one-page-equivalent:
   - bigMove         : Reuse or refine the framing's bigMove. 1-2 sentences.
   - decisionsRequired: Same list as framing, in the same order, rewritten crisply if needed.
   - valueSummary    : ValueRange covering the whole report (logic = sum-of-blocks, assumptions = key inputs, confidenceNote = weakest of the individual blocks).
-  - fteBand         : The framing's fteBandHint, returned as-is.
   - portfolioMaturity: {stage, evidence, gaps} — evidence MUST reference observable facts from the inputs; gaps MUST be specific.
   - deliveryMaturity : same structure, focused on operating model / delivery / governance.
 
@@ -209,7 +207,6 @@ decisionsRequired (produce one decision block per item, in order):
 ${framing.decisionsRequired.map((d, i) => `  ${i + 1}. ${d}`).join('\n')}
 valueLow: $${framing.valueLow.toLocaleString()}
 valueHigh: $${framing.valueHigh.toLocaleString()}
-fteBandHint: ${framing.fteBandHint}
 portfolioMaturityStage: ${framing.portfolioMaturityStage}
 deliveryMaturityStage: ${framing.deliveryMaturityStage}
 peerContextNote: ${framing.peerContextNote}
@@ -280,7 +277,6 @@ Return a JSON object with this EXACT structure:
       "assumptions": ["<assumption 1>", "<assumption 2>", "..."],
       "confidenceNote": "data-grounded" | "directional" | "order-of-magnitude"
     },
-    "fteBand": "<5" | "5-10" | "10-20" | "20-50" | "50-100" | "100+",
     "portfolioMaturity": {
       "stage": "Early" | "Working" | "Scaling" | "Native",
       "evidence": "<observable facts supporting this stage — cite specific tools, deployments>",

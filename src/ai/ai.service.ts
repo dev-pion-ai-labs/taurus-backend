@@ -226,9 +226,9 @@ Return a JSON object with this exact structure:
 
   /**
    * Full transformation-report generation. Runs Pass 1 (framing) then Pass 2
-   * (briefing), normalizes value ranges and FTE bands deterministically, and
-   * projects the result into the legacy `TransformationReportData` shape so
-   * the existing dashboard continues to render during the frontend migration.
+   * (briefing), normalizes value ranges deterministically, and projects the
+   * result into the legacy `TransformationReportData` shape so the existing
+   * dashboard continues to render during the frontend migration.
    */
   async generateTransformationReport(
     context: ReportGenerationContext,
@@ -532,7 +532,6 @@ export interface TransformationReportData {
   // Legacy shape (populated via projection from the new briefing for backward compat)
   overallScore: number;
   maturityLevel: string;
-  fteRedeployable: number;
   executiveSummary: {
     summary: string;
     keyFindings: string[];
@@ -703,15 +702,6 @@ const MATURITY_STAGE_TO_SCORE: Record<string, number> = {
   Native: 88,
 };
 
-const FTE_BAND_MIDPOINT: Record<string, number> = {
-  '<5': 3,
-  '5-10': 7,
-  '10-20': 15,
-  '20-50': 35,
-  '50-100': 75,
-  '100+': 150,
-};
-
 /**
  * Project the new briefing shape down onto the legacy TransformationReportData
  * fields. This keeps the existing dashboard/renderer/tracker working while the
@@ -740,9 +730,6 @@ function projectBriefingToLegacyShape(
   const growthShare = framing.reportGoal === 'Explore' ? 0.5 : 0.4;
   const totalGrowthValue = Math.round(totalValueMid * growthShare);
   const totalEfficiencyValue = Math.round(totalValueMid - totalGrowthValue);
-
-  const fteMidpoint =
-    FTE_BAND_MIDPOINT[briefing.executiveBrief.fteBand] ?? 0;
 
   const executiveSummary = {
     summary: renderSnapshotAsText(briefing),
@@ -778,7 +765,6 @@ function projectBriefingToLegacyShape(
   return {
     overallScore,
     maturityLevel,
-    fteRedeployable: fteMidpoint,
     executiveSummary,
     departmentScores,
     recommendations,

@@ -373,7 +373,6 @@ model TransformationReport {
   totalEfficiencyValue Float?       @map("total_efficiency_value")
   totalGrowthValue     Float?       @map("total_growth_value")
   totalAiValue         Float?       @map("total_ai_value")
-  fteRedeployable      Float?       @map("fte_redeployable")
 
   // Briefing framing (new)
   companyType          String?      @map("company_type")
@@ -385,7 +384,6 @@ model TransformationReport {
   // Ranged value (new)
   totalAiValueLow      Float?       @map("total_ai_value_low")
   totalAiValueHigh     Float?       @map("total_ai_value_high")
-  fteRedeployableBand  String?      @map("fte_redeployable_band")
   confidenceNote       String?      @map("confidence_note")
 
   // Structured content (JSON) — legacy

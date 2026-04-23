@@ -34,7 +34,6 @@ export interface ExecutiveBrief {
   bigMove: string;
   decisionsRequired: string[];
   valueSummary: ValueRange;
-  fteBand: string;
   portfolioMaturity: MaturityLadder;
   deliveryMaturity: MaturityLadder;
 }
@@ -132,7 +131,6 @@ export interface ReportFraming {
   decisionsRequired: string[];
   valueLow: number;
   valueHigh: number;
-  fteBandHint: string;
   peerContextNote: string;
   keyAssumptions: string[];
   portfolioMaturityStage: MaturityStage;

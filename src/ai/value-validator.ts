@@ -19,8 +19,6 @@ const INDUSTRY_DEFAULT_SALARY: Record<string, number> = {
   default: 75000,
 };
 
-const FTE_BANDS = ['<5', '5-10', '10-20', '20-50', '50-100', '100+'] as const;
-
 /**
  * Estimate annual payroll from provided department data, falling back to
  * industry defaults × headcount. Used to ceiling the value ranges the LLM
@@ -90,25 +88,6 @@ export function bandDollar(value: number): number {
 }
 
 /**
- * Map a numeric FTE count to one of the standard bands. Rejects decimals,
- * guarantees the output is one of the allowed strings.
- */
-export function bandFte(count: number): string {
-  if (!Number.isFinite(count) || count <= 0) return '<5';
-  const n = Math.round(count);
-  if (n < 5) return '<5';
-  if (n <= 10) return '5-10';
-  if (n <= 20) return '10-20';
-  if (n <= 50) return '20-50';
-  if (n <= 100) return '50-100';
-  return '100+';
-}
-
-export function isValidFteBand(band: string | null | undefined): boolean {
-  return !!band && (FTE_BANDS as readonly string[]).includes(band);
-}
-
-/**
  * Clamp a ValueRange's low/high to a max % of estimated payroll. For
  * efficiency-heavy briefings this should be ~15%; for growth-heavy, ~25%.
  * Also bands to sane granularity and enforces low <= high.
@@ -161,9 +140,7 @@ export function inferConfidence(
  * Apply all deterministic sanity rules to a freshly-generated briefing:
  *   - Clamp every ValueRange.high to max 15% of payroll (25% for growth-heavy)
  *   - Band every dollar amount
- *   - Force fteBand to a legal value
  *   - Downgrade confidenceNote to the weakest across blocks
- *   - Strip decimal FTEs if the model snuck them in anywhere
  */
 export function validateAndNormalizeBriefing(
   briefing: TransformationReportBriefing,
@@ -212,9 +189,6 @@ export function validateAndNormalizeBriefing(
       high: briefingHigh,
       confidenceNote: worstConfidence,
     },
-    fteBand: isValidFteBand(briefing.executiveBrief.fteBand)
-      ? briefing.executiveBrief.fteBand
-      : '<5',
   };
 
   return {
