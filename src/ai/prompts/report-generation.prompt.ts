@@ -1,3 +1,5 @@
+import type { ReportFraming } from '../types/report-briefing.types';
+
 export interface ReportGenerationContext {
   organization: {
     name: string;
@@ -51,68 +53,142 @@ export interface ReportGenerationContext {
   }[];
 }
 
-export function buildReportGenerationPrompt(ctx: ReportGenerationContext): {
-  system: string;
-  user: string;
-} {
-  // Scale output requirements to actual company data
-  const deptCount = ctx.departments.length;
-  const minDepts = deptCount >= 3 ? deptCount : Math.max(3, deptCount + 1);
-  const minRecs = Math.max(5, minDepts * 2);
-  const minPhases = 3;
+const VOCAB_BY_AUDIENCE: Record<string, string> = {
+  CLevel:
+    'C-level governance + P&L vocabulary. Reference board-level risk, capex vs opex tradeoffs, enterprise-wide governance, regulatory exposure. Avoid founder-speak ("velocity", "MVP", "runway").',
+  Partner:
+    'Partner-level practice-leadership vocabulary. Reference utilization, practice P&L, partner council alignment, cross-service-line ownership, billable leakage, pursuit win rates. Avoid product-speak.',
+  Founder:
+    'Founder-level pragmatic vocabulary. Reference runway, velocity, headcount pressure, sales-led vs product-led motion, founder bandwidth. Avoid enterprise-governance language unless the company is regulated.',
+};
 
-  const system = `You are an expert AI transformation consultant producing a board-ready AI Transformation Roadmap. You analyze companies with surgical precision and generate quantified, dollar-valued recommendations grounded in real data.
+const BLOCKER_GUIDANCE_BY_COMPANY_TYPE: Record<string, string> = {
+  Enterprise:
+    'Blockers typically include: multi-BU P&L conflicts, global tech governance review cycles (weeks-to-months), regulatory/compliance sign-off, data-residency constraints, procurement lead times, union or works-council consultation.',
+  ProfServices:
+    'Blockers typically include: partner council alignment, cross-service-line P&L ownership disputes, client contractual clauses on engagement telemetry, billable-utilization impact, risk management review protocols, practice leadership incentive misalignment.',
+  Startup:
+    'Blockers typically include: founder bandwidth, hiring lead time, engineering capacity vs roadmap commitments, runway/burn, customer concentration making pilots risky, lack of formal data governance.',
+  ProductTech:
+    'Blockers typically include: roadmap tradeoffs with feature velocity, cross-team prioritization, data pipeline ownership disputes, SOC2/security review cycles, headcount allocation between customer-facing and platform teams.',
+};
 
-Return ONLY valid JSON matching the exact schema specified. No markdown, no commentary, no wrapping. Start with { and end with }.
+/**
+ * Pass 2 — the Briefing Call.
+ *
+ * Given the framing output from Pass 1, produce the full briefing payload:
+ * executive brief (with maturity ladders), 2-3 decision blocks with the mandatory
+ * 10-subsection structure, department signal, assumptions & limitations, peer context.
+ */
+export function buildBriefingPrompt(
+  ctx: ReportGenerationContext,
+  framing: ReportFraming,
+): { system: string; user: string } {
+  const audienceGuidance =
+    VOCAB_BY_AUDIENCE[framing.primaryAudience] ?? VOCAB_BY_AUDIENCE.CLevel;
+  const blockerGuidance =
+    BLOCKER_GUIDANCE_BY_COMPANY_TYPE[framing.companyType] ??
+    BLOCKER_GUIDANCE_BY_COMPANY_TYPE.Enterprise;
 
-═══ SCORING RUBRIC (overallScore & departmentScores) ═══
-Score based on CURRENT AI/automation adoption, NOT potential or product offering:
-  0-20  "AI Curious"    — No AI/automation in use. Fully manual processes. No data infrastructure.
-  21-40 "AI Aware"      — Some basic automation (email sequences, simple integrations). Awareness of AI but no meaningful deployment. Limited data utilization.
-  41-60 "AI Ready"      — Active use of AI tools in 1-2 areas. Some workflow automation. Data collected but not systematically leveraged. Team has basic AI literacy.
-  61-80 "AI Advancing"  — AI integrated into core workflows across multiple departments. Predictive analytics in use. Automated decision-making in at least one area. Systematic data pipelines.
-  81-100 "AI Native"    — AI-first operations. Most decisions augmented by AI. Closed-loop learning systems. Advanced automation across all departments. Real-time data-driven everything.
+  const system = `You are a senior strategist producing an executive briefing (NOT a SaaS recommendation report). Your output will be read by a ${framing.primaryAudience} at a ${framing.companyType} organization. The report goal is to help them ${framing.reportGoal.toUpperCase()}.
 
-IMPORTANT: Score what the company DOES internally, not what they sell. A company selling AI products but running manual internal operations scores low. Credit existing tools/integrations (Zapier, HubSpot workflows, etc.) proportionally.
+Return ONLY valid JSON matching the exact schema specified. No markdown, no commentary. Start with { and end with }.
 
-═══ FINANCIAL METHODOLOGY ═══
-All dollar values MUST be derived from traceable calculations, not round estimates:
-- Use provided avg salary per department. If missing, use industry benchmarks: Tech $95K, Finance $105K, Healthcare $85K, Retail $55K, default $75K.
-- Hourly rate = avg salary / 2080 hours.
-- Efficiency value = weeklyHoursSaved × 52 × hourlyRate × automationPotential%. This is cost savings from time freed.
-- Growth value = estimated revenue impact from better conversion, retention, speed-to-market, etc. Must be justified by a specific mechanism (e.g., "improving trial conversion from 8% to 12% on $X pipeline").
-- fteRedeployable = total weekly hours saved across all workflows / 40. These are hours freed, not layoffs — frame as capacity unlocked.
-- Do NOT inflate values to seem impressive. A 5-person startup cannot save $500K/year. Total AI value should be plausible as a % of estimated revenue/costs.
-- Phase totalValue = sum of action values in that phase. Must add up.
+═══ TONE FOR THIS AUDIENCE ═══
+${audienceGuidance}
+FORBIDDEN vocabulary across ALL audiences: "ship", "jump in", "unlock", "leverage" (as a verb), "empower", "enable", "game-changer", "best-in-class", "cutting-edge", "synergies", "holistic".
 
-═══ GENERATION RULES ═══
-- Generate ${minDepts} departments (use provided departments, add 1-2 inferred ones only if fewer than 3 were provided), ${minRecs} recommendations, and ${minPhases} implementation phases with 2-4 actions each.
-- Every recommendation must have a unique UUID as its "id" field.
-- All scores are integers 0-100. All dollar values are numbers (not strings).
-- Department scores should have meaningful spread (not all within 5-10 points). Differentiate clearly.
-- Recommendations should reference specific findings from the consultation and website data — not generic advice.
-- executiveSummary.summary should be 3-5 sentences: lead with the single most important insight, then key opportunity, then the magnitude of value at stake.
-- keyFindings: 5-7 findings. Each should be specific to THIS company — mention their tools, their metrics, their stated challenges. Never generic.
-- Keep descriptions concise — 1-2 sentences max for currentState, potentialState, currentProcess, aiOpportunity.`;
+═══ CORE PRINCIPLES ═══
+1. NO FALSE PRECISION. Every dollar value is a RANGE {low, high, logic, assumptions[], confidenceNote}. Never a point estimate. Round heavily — $1M granularity below $25M, $5M above. FTE counts are BANDS ("<5", "5-10", "10-20", "20-50", "50-100", "100+") — never decimals, never precise integers.
+2. SHOW VALUE LOGIC. Every value range's "logic" field must show a simple sentence of the form "volume × improvement × margin/time" (or equivalent). Every value range's "assumptions" field must list the specific inputs used. No unexplained numbers.
+3. NO MEANINGLESS SCORES. No numeric "maturity score". Use the two named 4-step ladders (Early / Working / Scaling / Native) with evidence + gaps per ladder.
+4. INTERPRET, DON'T RESTATE. Never repeat back the company's own inputs as findings. Add prioritization, contradiction, or a non-obvious insight.
+5. REALISTIC EXECUTION. Reflect actual constraints of a ${framing.companyType}: ${blockerGuidance}
+6. HONEST ABOUT WHAT YOU DON'T KNOW. If data is missing, say so in assumptionsAndLimitations.uncertaintyNotes. Never invent.
+7. CONFIDENCE TAGGING. Every ValueRange has confidenceNote ∈ {"data-grounded", "directional", "order-of-magnitude"} based on how much grounding data you had.
+8. PEER CONTEXT HONESTY. If you don't have real peer data, peerContext.confidence = "none" and note that explicitly. Never name competitors without citing a source.
 
-  // Build departments section
-  let departmentsText =
-    'No departments mapped yet — infer standard departments from the industry and company size.';
-  if (ctx.departments.length > 0) {
-    departmentsText = ctx.departments
-      .map((d) => {
-        const workflows = d.workflows
-          .map(
-            (w) =>
-              `    - ${w.name}: ${w.description || 'No description'} | ${w.weeklyHours || '?'}h/week | ${w.peopleInvolved || '?'} people | Automation: ${w.automationLevel} | Pain: ${w.painPoints || 'None noted'} | Priority: ${w.priority}`,
-          )
-          .join('\n');
-        return `  ${d.name} (${d.headcount || '?'} people, avg salary: $${d.avgSalary || 'unknown'}/yr)\n${workflows || '    No workflows mapped'}`;
-      })
-      .join('\n\n');
-  }
+═══ DECISION BLOCKS ═══
+Produce EXACTLY ${framing.decisionsRequired.length} decision blocks — one per item in the framing's decisionsRequired list, in the same order.
 
-  // Build consultation answers section
+Each decision block MUST include ALL of the following subsections (no omissions — reject-able if missing):
+  - decision          : State as a decision (commit/not-commit, build/buy, centralize/federate). Not a task. Not a suggestion.
+  - whyNow            : {urgency: "why this is time-sensitive", costOfInaction: "what degrades if leadership does not decide"}
+  - value             : ValueRange {low, high, logic, assumptions[], confidenceNote}
+  - ownership         : {accountableRole: "single named role", supportingRoles: ["..."]}
+  - executionReality  : EXACTLY 3 blockers, each {blocker, category ∈ {organizational, technical, behavioral}, mitigation}
+  - ninetyDayPlan     : {objective, actions: 3-5 items, each {title, ownerRole, week, successSignal}}. MUST fit within organizational constraints of a ${framing.companyType}.
+  - proofPoint        : {metric, threshold, reviewBy} — a SINGLE measurable signal that validates success
+  - dependencies      : 2-5 items — what must happen before or alongside
+  - risksAndTradeoffs : 2-4 items, each {risk, resistanceSource, mitigation}
+
+═══ SNAPSHOT (5-SECOND TL;DR) ═══
+Produce a compact summary designed to be read in 5 seconds by someone who may not read the rest of the report:
+  - headline         : ONE sentence, newspaper-style. A statement, not a question. Must name the specific binding constraint or opportunity for THIS company. Max 20 words.
+  - bottomLine       : 1-2 sentences stating what leadership should do and why. Concrete verb. No SaaS clichés.
+  - keyStats         : 2-4 pre-formatted scannable facts, each {label, value}. The value is a HUMAN-READABLE STRING (not a number). Examples:
+                        { "label": "Value at stake", "value": "$40M–$60M annually" }
+                        { "label": "Capacity freed", "value": "50–100 FTE equivalents" }
+                        { "label": "Decisions required", "value": "3 board-level" }
+                        { "label": "Time to first proof point", "value": "90 days" }
+  - watchouts        : 1-2 short bullets flagging the risks most likely to derail execution. Audience-aware (Enterprise: governance; Startup: runway; ProfServices: partner alignment).
+  - readingTime      : approximate reading time of the full report, e.g. "5 min read", "8 min read".
+  - confidenceNote   : weakest confidence across the briefing's value claims (inherit from the executiveBrief.valueSummary).
+
+═══ EXECUTIVE BRIEF ═══
+Produce a crisp one-page-equivalent:
+  - thesis          : Reuse or refine the framing's thesis. One sentence.
+  - bigMove         : Reuse or refine the framing's bigMove. 1-2 sentences.
+  - decisionsRequired: Same list as framing, in the same order, rewritten crisply if needed.
+  - valueSummary    : ValueRange covering the whole report (logic = sum-of-blocks, assumptions = key inputs, confidenceNote = weakest of the individual blocks).
+  - fteBand         : The framing's fteBandHint, returned as-is.
+  - portfolioMaturity: {stage, evidence, gaps} — evidence MUST reference observable facts from the inputs; gaps MUST be specific.
+  - deliveryMaturity : same structure, focused on operating model / delivery / governance.
+
+═══ DEPARTMENT SIGNAL ═══
+NOT a set of per-department dollar values. Instead: 3-6 short observations (one per relevant department) that surface patterns the decision blocks rely on. Each item: {department, observation (1-2 sentences), relevantDecisionBlockIds: decision IDs this observation supports}.
+
+═══ ASSUMPTIONS & LIMITATIONS (MANDATORY) ═══
+  - scopeOfInputData   : 1-2 sentences on what the analysis is based on (e.g., "90-minute consultation, 3 stakeholders, Q2 department data; no access to CRM, finance, or delivery telemetry").
+  - uncertaintyNotes   : 3-6 bullets on what's uncertain and why.
+  - validationRequired : 3-5 bullets on what must be validated before acting — name the system or owner where possible.
+
+═══ PEER CONTEXT ═══
+Reuse the framing's peerContextNote. Set confidence = "directional" if the note cites observable market patterns, "none" if you don't have data. NEVER name a specific competitor without a citation in the sources[] field.
+
+═══ WORKED EXAMPLE — VALUE RANGE (ProfServices) ═══
+{
+  "low": 12000000,
+  "high": 20000000,
+  "logic": "~400 senior delivery staff × 20% coordination-tax reduction × ~$250/hr × 2000 hrs/yr × 10-15% realized in year one",
+  "assumptions": ["Coordination tax currently 35-45% of senior time (stated in consultation)", "Realization in year 1 limited by partner council approval cycles", "Rate blended across Sr Manager/Director level"],
+  "confidenceNote": "directional"
+}
+
+═══ WORKED EXAMPLE — VALUE RANGE (ProductTech) ═══
+{
+  "low": 3000000,
+  "high": 6000000,
+  "logic": "~2000 active paying accounts × 4% churn reduction × $8K avg ACV = $640K ARR protected per year; doubled over 18-month retention horizon",
+  "assumptions": ["Baseline churn ~12% annual (inferred from growth-stage SaaS benchmarks)", "AI intervention targets at-risk segments representing ~40% of churn", "ACV stable over horizon"],
+  "confidenceNote": "order-of-magnitude"
+}`;
+
+  const deptText =
+    ctx.departments.length > 0
+      ? ctx.departments
+          .map((d) => {
+            const wf = d.workflows
+              .map(
+                (w) =>
+                  `    - ${w.name} | ${w.weeklyHours || '?'}h/wk × ${w.peopleInvolved || '?'} ppl | automation: ${w.automationLevel} | priority: ${w.priority} | pain: ${w.painPoints || 'none noted'}`,
+              )
+              .join('\n');
+            return `  ${d.name} (${d.headcount || '?'} ppl, $${d.avgSalary || '?'} avg salary)\n${wf || '    (no workflows mapped)'}`;
+          })
+          .join('\n\n')
+      : '(no departments mapped)';
+
   const answersText = ctx.consultationAnswers
     .map(
       (a) =>
@@ -120,121 +196,177 @@ All dollar values MUST be derived from traceable calculations, not round estimat
     )
     .join('\n\n');
 
-  const user = `Analyze this company and generate a complete AI Transformation Roadmap.
+  const user = `Produce the briefing for ${ctx.organization.name}. The framing call has already decided audience, goal, company type, thesis, Big Move, the decisions required, and the overall value range. Your job is to expand the framing into a full briefing — decision blocks, executive brief, department signal, assumptions, peer context.
+
+═══ FRAMING (FROM PASS 1 — TREAT AS GIVEN) ═══
+companyType: ${framing.companyType}
+primaryAudience: ${framing.primaryAudience}
+reportGoal: ${framing.reportGoal}
+inferenceRationale: ${framing.inferenceRationale}
+thesis: ${framing.thesis}
+bigMove: ${framing.bigMove}
+decisionsRequired (produce one decision block per item, in order):
+${framing.decisionsRequired.map((d, i) => `  ${i + 1}. ${d}`).join('\n')}
+valueLow: $${framing.valueLow.toLocaleString()}
+valueHigh: $${framing.valueHigh.toLocaleString()}
+fteBandHint: ${framing.fteBandHint}
+portfolioMaturityStage: ${framing.portfolioMaturityStage}
+deliveryMaturityStage: ${framing.deliveryMaturityStage}
+peerContextNote: ${framing.peerContextNote}
+keyAssumptions:
+${framing.keyAssumptions.map((a) => `  - ${a}`).join('\n')}
 
 ═══ COMPANY CONTEXT ═══
 Name: ${ctx.organization.name}
 Industry: ${ctx.organization.industry}
-Size: ${ctx.organization.size || 'Not specified'} employees
+Size: ${ctx.organization.size || 'Not specified'}
 
 ═══ BUSINESS CONTEXT ═══
-Description: ${ctx.onboarding.businessDescription}
+${ctx.onboarding.businessDescription}
 Revenue Streams: ${ctx.onboarding.revenueStreams}
 
-═══ CHALLENGES ═══
-${[...ctx.onboarding.challenges, ctx.onboarding.customChallenges].filter(Boolean).join(', ')}
+═══ STATED CHALLENGES ═══
+${[...ctx.onboarding.challenges, ctx.onboarding.customChallenges].filter(Boolean).join(', ') || '(none)'}
 
-═══ CURRENT TOOLS & TECH STACK ═══
-${[...ctx.onboarding.tools, ctx.onboarding.customTools].filter(Boolean).join(', ')}
+═══ CURRENT TOOLS ═══
+${[...ctx.onboarding.tools, ctx.onboarding.customTools].filter(Boolean).join(', ') || '(none)'}
 
-═══ AI GOALS ═══
-${[...ctx.onboarding.goals, ctx.onboarding.customGoals].filter(Boolean).join(', ')}
+═══ STATED GOALS ═══
+${[...ctx.onboarding.goals, ctx.onboarding.customGoals].filter(Boolean).join(', ') || '(none)'}
 
-═══ AVAILABLE DATA SOURCES ═══
-${[...ctx.onboarding.dataSources, ctx.onboarding.customDataSources].filter(Boolean).join(', ')}
-${ctx.scrapedInsights ? `
-═══ WEBSITE INTELLIGENCE (scraped from company website) ═══
-Site: ${ctx.scrapedInsights.title || 'N/A'} — ${ctx.scrapedInsights.description || 'No description'}
-AI Usage Detected: ${ctx.scrapedInsights.aiDetected ? 'YES — ' + ctx.scrapedInsights.aiMentions.join(', ') : 'No'}
-Automation Detected: ${ctx.scrapedInsights.automationDetected ? 'YES — ' + ctx.scrapedInsights.automationMentions.join(', ') : 'No'}
+═══ DATA SOURCES ═══
+${[...ctx.onboarding.dataSources, ctx.onboarding.customDataSources].filter(Boolean).join(', ') || '(none)'}
+${
+  ctx.scrapedInsights
+    ? `
+═══ WEBSITE INTELLIGENCE ═══
+Title: ${ctx.scrapedInsights.title || 'N/A'}
+Description: ${ctx.scrapedInsights.description || 'N/A'}
+AI detected: ${ctx.scrapedInsights.aiDetected ? 'YES — ' + ctx.scrapedInsights.aiMentions.join(', ') : 'No'}
+Automation detected: ${ctx.scrapedInsights.automationDetected ? 'YES — ' + ctx.scrapedInsights.automationMentions.join(', ') : 'No'}
 Technologies: ${ctx.scrapedInsights.technologies.join(', ') || 'Unknown'}
 Products: ${ctx.scrapedInsights.products.join(', ') || 'Unknown'}
-Services: ${ctx.scrapedInsights.services.join(', ') || 'Unknown'}
-${ctx.scrapedInsights.companyInfo ? `Company Info: ${Object.entries(ctx.scrapedInsights.companyInfo).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(', ')}` : ''}
-${ctx.scrapedInsights.businessModel ? `Business Model: ${ctx.scrapedInsights.businessModel.type || 'Unknown'}${ctx.scrapedInsights.businessModel.revenueStreams?.length ? ' — Revenue: ' + ctx.scrapedInsights.businessModel.revenueStreams.join(', ') : ''}` : ''}
-USE THIS DATA to ground your analysis — reference specific technologies, products, and AI/automation findings in your scores and recommendations.
-` : ''}
+Business model: ${ctx.scrapedInsights.businessModel?.type || 'Unknown'}
+`
+    : ''
+}
 ═══ DEPARTMENTS & WORKFLOWS ═══
-${departmentsText}
+${deptText}
 
 ═══ CONSULTATION RESPONSES ═══
-${answersText || 'No consultation responses available.'}
+${answersText || '(none)'}
 
 ═══ OUTPUT SCHEMA ═══
 Return a JSON object with this EXACT structure:
-
 {
-  "overallScore": <integer 0-100>,
-  "maturityLevel": "<one of: AI Curious | AI Aware | AI Ready | AI Advancing | AI Native>",
-  "fteRedeployable": <float, number of full-time equivalents that can be redeployed>,
-  "executiveSummary": {
-    "summary": "<3-5 sentence executive overview of the company's AI transformation opportunity>",
-    "keyFindings": ["<finding 1>", "<finding 2>", ... ] // 5-7 key findings
+  "snapshot": {
+    "headline": "<one sentence — the single most important statement>",
+    "bottomLine": "<1-2 sentences — what leadership should do and why>",
+    "keyStats": [
+      { "label": "<label>", "value": "<pre-formatted string, e.g. '$40M–$60M annually'>" }
+    ],
+    "watchouts": ["<1-2 short bullets>"],
+    "readingTime": "<e.g. '5 min read'>",
+    "confidenceNote": "data-grounded" | "directional" | "order-of-magnitude"
   },
-  "departmentScores": [
+  "executiveBrief": {
+    "thesis": "<one sentence>",
+    "bigMove": "<1-2 sentences>",
+    "decisionsRequired": ["<decision 1>", "<decision 2>", "<decision 3 (optional)>"],
+    "valueSummary": {
+      "low": <number>,
+      "high": <number>,
+      "logic": "<one sentence — sum of decision-block values or aggregate mechanism>",
+      "assumptions": ["<assumption 1>", "<assumption 2>", "..."],
+      "confidenceNote": "data-grounded" | "directional" | "order-of-magnitude"
+    },
+    "fteBand": "<5" | "5-10" | "10-20" | "20-50" | "50-100" | "100+",
+    "portfolioMaturity": {
+      "stage": "Early" | "Working" | "Scaling" | "Native",
+      "evidence": "<observable facts supporting this stage — cite specific tools, deployments>",
+      "gaps": "<specific gaps vs the next stage up>"
+    },
+    "deliveryMaturity": {
+      "stage": "Early" | "Working" | "Scaling" | "Native",
+      "evidence": "<observable facts about delivery/governance/knowledge capture>",
+      "gaps": "<specific gaps>"
+    }
+  },
+  "decisionBlocks": [
     {
-      "department": "<department name>",
-      "score": <integer 0-100>,
-      "maturityLevel": "<same scale>",
-      "currentState": "<1-2 sentences: how this department currently uses AI/automation>",
-      "potentialState": "<1-2 sentences: what this department looks like fully AI-enabled>",
-      "efficiencyValue": <number: annual $ savings>,
-      "growthValue": <number: annual $ revenue opportunity>,
-      "workflows": [
-        {
-          "name": "<workflow name>",
-          "currentProcess": "<how it works now>",
-          "aiOpportunity": "<what AI can do>",
-          "automationPotential": <integer 0-100>,
-          "weeklyHoursSaved": <number>,
-          "annualValueSaved": <number>,
-          "effort": "LOW" | "MEDIUM" | "HIGH",
-          "timeframe": "WEEKS" | "MONTHS" | "QUARTER"
-        }
+      "id": "<short-kebab-case-id>",
+      "decision": "<state as a decision>",
+      "whyNow": {
+        "urgency": "<why time-sensitive>",
+        "costOfInaction": "<what degrades if ignored>"
+      },
+      "value": { "low": <n>, "high": <n>, "logic": "<>", "assumptions": [".."], "confidenceNote": ".." },
+      "ownership": {
+        "accountableRole": "<single named role>",
+        "supportingRoles": ["<role>", "<role>"]
+      },
+      "executionReality": [
+        { "blocker": "<>", "category": "organizational" | "technical" | "behavioral", "mitigation": "<>" },
+        { ... 2 more ... }
+      ],
+      "ninetyDayPlan": {
+        "objective": "<one sentence, scoped to 90 days>",
+        "actions": [
+          { "title": "<>", "ownerRole": "<>", "week": "<e.g. Weeks 1-2>", "successSignal": "<>" }
+        ]
+      },
+      "proofPoint": {
+        "metric": "<specific metric>",
+        "threshold": "<value that validates>",
+        "reviewBy": "<e.g. End of Q2>"
+      },
+      "dependencies": ["<>", "<>"],
+      "risksAndTradeoffs": [
+        { "risk": "<>", "resistanceSource": "<role or group>", "mitigation": "<>" }
       ]
     }
   ],
-  "recommendations": [
+  "departmentSignal": [
     {
-      "id": "<unique UUID v4>",
-      "title": "<actionable title>",
-      "description": "<2-3 sentences: what, why, expected outcome>",
-      "department": "<department name>",
-      "impact": "HIGH" | "MEDIUM" | "LOW",
-      "effort": "LOW" | "MEDIUM" | "HIGH",
-      "annualValue": <number>,
-      "timeToImplement": "<e.g. 2-3 weeks>",
-      "prerequisites": ["<prereq 1>", ...],
-      "category": "EFFICIENCY" | "GROWTH" | "EXPERIENCE" | "INTELLIGENCE"
+      "department": "<name>",
+      "observation": "<1-2 sentences pattern observation>",
+      "relevantDecisionBlockIds": ["<id>"]
     }
   ],
-  "implementationPlan": [
-    {
-      "phase": <1|2|3|4>,
-      "name": "<Quick Wins | Foundation | Scale | Optimize>",
-      "timeframe": "<e.g. Weeks 1-4>",
-      "focus": "<1 sentence: what this phase achieves>",
-      "totalValue": <number: combined $ value of this phase>,
-      "actions": [
-        {
-          "title": "<action title>",
-          "department": "<department>",
-          "value": <number>,
-          "effort": "LOW" | "MEDIUM" | "HIGH",
-          "status": "NOT_STARTED"
-        }
-      ]
-    }
-  ]
+  "assumptionsAndLimitations": {
+    "scopeOfInputData": "<1-2 sentences on what analysis is based on>",
+    "uncertaintyNotes": ["<>", "<>", "<>"],
+    "validationRequired": ["<>", "<>", "<>"]
+  },
+  "peerContext": {
+    "note": "<1-2 sentences>",
+    "confidence": "directional" | "none",
+    "sources": []
+  }
 }
 
 Remember:
-- Generate ${minDepts} departments${deptCount > 0 ? ' (use the provided ones, only infer if fewer than 3)' : ' (infer from industry)'}, ${minRecs} recommendations, and ${minPhases} phases with 2-4 actions each.
-- All dollar values must be traceable: show the math via the methodology above. A ${ctx.organization.size || 'mid-size'}-employee company cannot save more than a realistic % of its payroll.
-- Every recommendation needs a unique UUID.
-- Department scores should have at least 15-point spread between highest and lowest.
-- Reference specific consultation answers and website findings — not generic advice.
-- Keep descriptions concise — 1-2 sentences each.`;
+- EXACTLY ${framing.decisionsRequired.length} decision blocks, in the same order as decisionsRequired.
+- Every ValueRange has {low, high, logic, assumptions, confidenceNote}. No exceptions.
+- Each decisionBlock.executionReality has EXACTLY 3 blockers.
+- ninetyDayPlan.actions must be realistic for a ${framing.companyType} — do NOT promise cross-BU rollout in 90 days.
+- assumptionsAndLimitations is mandatory and non-empty.
+- The tone must match audience: ${framing.primaryAudience}.
+- No SaaS clichés. No emojis. No "Your recommendations have been added to the Tracker" handoff language.`;
 
   return { system, user };
+}
+
+/**
+ * @deprecated — use buildBriefingPrompt(ctx, framing) as part of the two-pass flow.
+ * Retained to keep existing imports of this function (type surface) from breaking
+ * during the migration. The AiService now calls framing + briefing explicitly.
+ */
+export function buildReportGenerationPrompt(_ctx: ReportGenerationContext): {
+  system: string;
+  user: string;
+} {
+  throw new Error(
+    'buildReportGenerationPrompt is deprecated. Use the two-pass flow via AiService.generateTransformationReport, which calls buildFramingPrompt then buildBriefingPrompt.',
+  );
 }
