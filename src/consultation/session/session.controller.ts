@@ -104,4 +104,24 @@ export class SessionController {
     });
     res.end(pdfBuffer);
   }
+
+  @Get(':id/review/export')
+  async exportConsultationPdf(
+    @Param('id') sessionId: string,
+    @CurrentUser('organizationId') orgId: string,
+    @Res() res: Response,
+  ) {
+    const pdfBuffer = await this.reportService.exportConsultationPdf(
+      sessionId,
+      orgId,
+    );
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="taurus-consultation-${dateStr}.pdf"`,
+      'Content-Length': pdfBuffer.length,
+    });
+    res.end(pdfBuffer);
+  }
 }

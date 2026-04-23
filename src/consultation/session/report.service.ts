@@ -272,10 +272,209 @@ export class ReportService {
 </body>
 </html>`;
 
+    return this.renderHtmlToPdf(html);
+  }
+
+  async exportConsultationPdf(
+    sessionId: string,
+    organizationId: string,
+  ): Promise<Buffer> {
+    const session = await this.prisma.consultationSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        questions: {
+          orderBy: { orderIndex: 'asc' },
+          include: { question: true },
+        },
+        organization: { include: { industry: true } },
+        user: true,
+      },
+    });
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.organizationId !== organizationId) {
+      throw new ForbiddenException("Not your organization's session");
+    }
+
+    const SECTION_LABEL: Record<string, string> = {
+      BASE: 'Base Questions',
+      INDUSTRY: 'Industry Questions',
+      CHALLENGE_BONUS: 'Challenge & Bonus Questions',
+      PERSONALIZED: 'Personalized Questions',
+      ADAPTIVE: 'Adaptive Follow-ups',
+    };
+    const SECTION_ORDER = [
+      'BASE',
+      'INDUSTRY',
+      'CHALLENGE_BONUS',
+      'PERSONALIZED',
+      'ADAPTIVE',
+    ];
+
+    const escapeHtml = (s: string) =>
+      s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    type Normalized = {
+      id: string;
+      section: string;
+      orderIndex: number;
+      text: string;
+      type: string;
+      options: string[];
+      answer: unknown;
+      skipped: boolean;
+      answeredAt: Date | null;
+    };
+
+    const normalized: Normalized[] = session.questions.map((sq) => {
+      const isAdaptive = sq.isAdaptive;
+      const text = isAdaptive ? sq.adaptiveText ?? '' : sq.question?.questionText ?? '';
+      const type = isAdaptive
+        ? sq.adaptiveType ?? ''
+        : sq.question?.questionType ?? '';
+      const rawOptions = isAdaptive ? sq.adaptiveOptions : sq.question?.options;
+      const options: string[] = Array.isArray(rawOptions)
+        ? (rawOptions as unknown as string[])
+        : [];
+      const answer = (sq.answer as { value?: unknown } | null)?.value ?? null;
+      return {
+        id: sq.id,
+        section: sq.section,
+        orderIndex: sq.orderIndex,
+        text,
+        type,
+        options,
+        answer,
+        skipped: sq.skipped,
+        answeredAt: sq.answeredAt,
+      };
+    });
+
+    // Group by section
+    const bySection = new Map<string, Normalized[]>();
+    for (const q of normalized) {
+      const arr = bySection.get(q.section) ?? [];
+      arr.push(q);
+      bySection.set(q.section, arr);
+    }
+    const sortedSections = Array.from(bySection.entries()).sort(
+      ([a], [b]) =>
+        (SECTION_ORDER.indexOf(a) === -1 ? 99 : SECTION_ORDER.indexOf(a)) -
+        (SECTION_ORDER.indexOf(b) === -1 ? 99 : SECTION_ORDER.indexOf(b)),
+    );
+
+    const renderAnswer = (q: Normalized): string => {
+      if (q.skipped || q.answer == null || q.answer === '') {
+        return `<div class="answer muted">Skipped</div>`;
+      }
+      if (q.type === 'MULTI_CHOICE' && Array.isArray(q.answer)) {
+        const items = (q.answer as string[])
+          .map((a) => `<li>${escapeHtml(String(a))}</li>`)
+          .join('');
+        return `<ul class="answer-list">${items}</ul>`;
+      }
+      if (q.type === 'SCALE' && typeof q.answer === 'number') {
+        return `<div class="answer"><strong>${q.answer}</strong> / 5</div>`;
+      }
+      return `<div class="answer">${escapeHtml(String(q.answer))}</div>`;
+    };
+
+    let running = 0;
+    const sectionsHtml = sortedSections
+      .map(([section, questions]) => {
+        const sorted = questions.sort((a, b) => a.orderIndex - b.orderIndex);
+        const items = sorted
+          .map((q) => {
+            running += 1;
+            return `<div class="q-card">
+              <div class="q-text"><span class="q-num">Q${running}.</span> ${escapeHtml(q.text)}</div>
+              ${renderAnswer(q)}
+            </div>`;
+          })
+          .join('');
+        return `<section>
+          <h2>${escapeHtml(SECTION_LABEL[section] ?? section)}</h2>
+          ${items}
+        </section>`;
+      })
+      .join('');
+
+    const completedDate = session.completedAt
+      ? new Date(session.completedAt).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })
+      : null;
+    const startedDate = new Date(session.startedAt).toLocaleDateString(
+      'en-US',
+      { year: 'numeric', month: 'long', day: 'numeric' },
+    );
+
+    const answeredCount = normalized.filter(
+      (q) => !q.skipped && q.answer != null && q.answer !== '',
+    ).length;
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #18181b; margin: 0; padding: 40px; background: #fff; }
+    .header { border-bottom: 3px solid #1C1917; padding-bottom: 16px; margin-bottom: 24px; }
+    .logo { font-size: 28px; font-weight: 800; color: #1C1917; }
+    .date { font-size: 13px; color: #71717a; margin-top: 4px; }
+    h1 { font-size: 22px; margin: 4px 0 8px; }
+    h2 { font-size: 14px; color: #1C1917; margin: 24px 0 12px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #e4e4e7; padding-bottom: 6px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: #52525b; margin-bottom: 16px; }
+    .meta span { background: #fafafa; padding: 4px 10px; border-radius: 6px; }
+    .q-card { border: 1px solid #e7e5e4; border-radius: 10px; padding: 14px 16px; margin: 10px 0; page-break-inside: avoid; }
+    .q-num { color: #a8a29e; margin-right: 6px; font-weight: 500; }
+    .q-text { font-size: 14px; font-weight: 500; color: #1C1917; line-height: 1.5; margin-bottom: 8px; }
+    .answer { background: #f5f5f4; padding: 8px 12px; border-radius: 6px; font-size: 13px; color: #44403c; line-height: 1.5; }
+    .answer.muted { background: transparent; color: #a8a29e; font-style: italic; padding: 4px 0; }
+    .answer-list { margin: 0; padding: 0 0 0 20px; font-size: 13px; color: #44403c; line-height: 1.7; }
+    .footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #e4e4e7; font-size: 11px; color: #a1a1aa; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">TAURUS</div>
+    <h1>Consultation Review</h1>
+    <div class="date">${escapeHtml(session.organization.name)} &mdash; ${completedDate ?? `Started ${startedDate}`}</div>
+  </div>
+
+  <div class="meta">
+    <span>Status: ${escapeHtml(session.status)}</span>
+    <span>${answeredCount} of ${normalized.length} answered</span>
+    ${session.user?.email ? `<span>${escapeHtml(session.user.email)}</span>` : ''}
+  </div>
+
+  ${sectionsHtml || '<p style="color:#71717a;">No questions in this session.</p>'}
+
+  <div class="footer">
+    <p>Confidential — Generated by Taurus AI Transformation OS</p>
+  </div>
+</body>
+</html>`;
+
+    return this.renderHtmlToPdf(html);
+  }
+
+  private async renderHtmlToPdf(html: string): Promise<Buffer> {
     const puppeteer = await import('puppeteer');
     const browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+      ],
     });
 
     try {
