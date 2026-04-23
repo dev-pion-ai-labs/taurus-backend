@@ -63,9 +63,6 @@ CEILING: Total valueHigh must be plausible as a % of estimated annual payroll or
   - valueHigh must be ≤ 15% of estimated payroll for efficiency-heavy companies, ≤ 25% for growth-heavy companies.
   - A 5-person company CANNOT have $10M in annual AI value.
 
-═══ FTE BAND HINT ═══
-fteBandHint must be one of: "<5" | "5-10" | "10-20" | "20-50" | "50-100" | "100+". Never a precise number, never a decimal.
-
 ═══ PEER CONTEXT ═══
 If you have directional knowledge of what similar companies do, write 1-2 sentences. Be honest about confidence. NEVER name specific competitors without sourcing. If you don't have data, the note must say "We do not have structured peer data for this segment — directional only".
 
@@ -148,7 +145,6 @@ Return a JSON object with this EXACT structure:
   "decisionsRequired": ["<decision 1 (yes/no-shaped)>", "<decision 2>", "<decision 3 (optional)>"],
   "valueLow": <number, annual $ low bound>,
   "valueHigh": <number, annual $ high bound>,
-  "fteBandHint": "<5" | "5-10" | "10-20" | "20-50" | "50-100" | "100+",
   "peerContextNote": "<1-2 sentences; state 'directional only' or 'no peer data' if uncertain>",
   "keyAssumptions": ["<assumption 1>", "<assumption 2>", "..."],
   "portfolioMaturityStage": "Early" | "Working" | "Scaling" | "Native",
@@ -157,7 +153,6 @@ Return a JSON object with this EXACT structure:
 
 Remember:
 - valueHigh must be a plausible % of estimated payroll. A 5-person company cannot show $10M.
-- fteBandHint must be a band, not a number.
 - The thesis must be specific to THIS company — mention their tools, stated challenges, or business specifics.
 - Tone must match primaryAudience (C-level: governance + P&L; Partner: practice leadership + utilization; Founder: runway + velocity).`;
 

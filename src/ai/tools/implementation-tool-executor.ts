@@ -171,7 +171,6 @@ export class ImplementationToolExecutor {
       totalEfficiencyValue: report.totalEfficiencyValue,
       totalGrowthValue: report.totalGrowthValue,
       totalAiValue: report.totalAiValue,
-      fteRedeployable: report.fteRedeployable,
       executiveSummary: report.executiveSummary,
       departmentScores: report.departmentScores,
       recommendations: report.recommendations,

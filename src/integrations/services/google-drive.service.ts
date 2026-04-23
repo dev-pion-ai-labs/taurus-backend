@@ -215,7 +215,6 @@ export class GoogleDriveService {
     lines.push(`| Efficiency Value | $${(r.totalEfficiencyValue || 0).toLocaleString()} |`);
     lines.push(`| Growth Value | $${(r.totalGrowthValue || 0).toLocaleString()} |`);
     lines.push(`| Total AI Value | $${(r.totalAiValue || 0).toLocaleString()} |`);
-    lines.push(`| FTE Redeployable | ${r.fteRedeployable || 0} |`);
     lines.push('');
 
     if (r.recommendations?.length) {

@@ -1,10 +1,8 @@
 import {
   bandDollar,
-  bandFte,
   clampValueRange,
   estimateAnnualPayroll,
   inferConfidence,
-  isValidFteBand,
   parseCompanySize,
   validateAndNormalizeBriefing,
 } from './value-validator';
@@ -37,32 +35,6 @@ const makeCtx = (
 });
 
 describe('value-validator — primitive helpers', () => {
-  describe('bandFte', () => {
-    it('bands tiny counts to <5', () => {
-      expect(bandFte(0)).toBe('<5');
-      expect(bandFte(3)).toBe('<5');
-      expect(bandFte(4)).toBe('<5');
-    });
-
-    it('bands mid counts correctly', () => {
-      expect(bandFte(7)).toBe('5-10');
-      expect(bandFte(15)).toBe('10-20');
-      expect(bandFte(35)).toBe('20-50');
-      expect(bandFte(75)).toBe('50-100');
-    });
-
-    it('caps at 100+', () => {
-      expect(bandFte(100)).toBe('50-100');
-      expect(bandFte(101)).toBe('100+');
-      expect(bandFte(187.2)).toBe('100+');
-    });
-
-    it('rejects decimals by rounding', () => {
-      expect(bandFte(4.9)).toBe('5-10');
-      expect(bandFte(4.4)).toBe('<5');
-    });
-  });
-
   describe('bandDollar', () => {
     it('rounds sub-$1M to nearest $50K', () => {
       expect(bandDollar(275_000)).toBe(300_000);
@@ -82,16 +54,6 @@ describe('value-validator — primitive helpers', () => {
     it('returns 0 for invalid inputs', () => {
       expect(bandDollar(-1)).toBe(0);
       expect(bandDollar(NaN)).toBe(0);
-    });
-  });
-
-  describe('isValidFteBand', () => {
-    it('accepts only documented bands', () => {
-      expect(isValidFteBand('50-100')).toBe(true);
-      expect(isValidFteBand('100+')).toBe(true);
-      expect(isValidFteBand('187')).toBe(false);
-      expect(isValidFteBand('')).toBe(false);
-      expect(isValidFteBand(undefined)).toBe(false);
     });
   });
 
@@ -280,7 +242,6 @@ const makeBriefing = (
       assumptions: [],
       confidenceNote: 'directional',
     },
-    fteBand: '20-50',
     portfolioMaturity: { stage: 'Working', evidence: 'e', gaps: 'g' },
     deliveryMaturity: { stage: 'Early', evidence: 'e', gaps: 'g' },
   },
@@ -333,12 +294,6 @@ describe('validateAndNormalizeBriefing', () => {
     expect(out.executiveBrief.valueSummary.confidenceNote).toBe('order-of-magnitude');
   });
 
-  it('forces fteBand to a valid band', () => {
-    const briefing = makeBriefing([makeBlock('a', 1_000_000, 2_000_000)]);
-    (briefing.executiveBrief.fteBand as any) = '187.2';
-    const out = validateAndNormalizeBriefing(briefing, bigCtx);
-    expect(out.executiveBrief.fteBand).toBe('<5');
-  });
 });
 
 describe('renderSnapshotAsText', () => {
@@ -349,7 +304,7 @@ describe('renderSnapshotAsText', () => {
       bottomLine: 'Commit to a 180-day ops program.',
       keyStats: [
         { label: 'Value at stake', value: '$40M-$60M annually' },
-        { label: 'Capacity freed', value: '50-100 FTE equivalents' },
+        { label: 'Time to first proof point', value: '90 days' },
       ],
       watchouts: ['Partner council alignment', 'Global governance review cycle'],
       readingTime: '8 min read',

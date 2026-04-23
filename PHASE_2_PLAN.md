@@ -110,7 +110,6 @@ model ConsultationReport {
   // Aggregated values
   totalEfficiencyValue  Float   @default(0) @map("total_efficiency_value") // e.g., $1.16M
   totalGrowthValue      Float   @default(0) @map("total_growth_value")     // e.g., $9.2M
-  totalFteImpact        Float   @default(0) @map("total_fte_impact")       // e.g., 11.1
 
   // AI-generated narrative
   executiveSummary  String?  @map("executive_summary")     // 2-3 paragraph overview
@@ -167,7 +166,6 @@ model RoadmapAction {
   estimatedValue   Float      @map("estimated_value")    // Dollar value per year
   estimatedEffort  String     @map("estimated_effort")    // "2 hours", "1 week", "1 month"
   automationLevel  Int?       @map("automation_level")    // % that can be automated (0-100)
-  fteImpact        Float?     @map("fte_impact")          // FTEs freed/redeployed
 
   // Implementation details
   toolRecommendation  String?  @map("tool_recommendation")
@@ -278,7 +276,6 @@ Takes the structured extraction + industry context and generates:
       "estimatedValue": 43000,
       "estimatedEffort": "1 week",
       "automationLevel": 85,
-      "fteImpact": 0.5,
       "toolRecommendation": "Zendesk AI add-on"
     }
   ]
@@ -463,7 +460,7 @@ Generate:
    - Each with: title, description, department, priority (QUICK_WIN/
      STRATEGIC/INCREMENTAL/DEFERRED), phase (1-4), valueType
      (EFFICIENCY/GROWTH), estimatedValue (annual $), estimatedEffort,
-     automationLevel (%), fteImpact, toolRecommendation
+     automationLevel (%), toolRecommendation
    - Phase 1 (Weeks 1-4): Quick wins — low effort, high impact
    - Phase 2 (Weeks 5-8): Core initiatives
    - Phase 3 (Weeks 9-12): Strategic plays

@@ -81,7 +81,6 @@ export class ReportService {
         totalEfficiencyValue: null,
         totalGrowthValue: null,
         totalAiValue: null,
-        fteRedeployable: null,
         executiveSummary: Prisma.DbNull,
         departmentScores: Prisma.DbNull,
         recommendations: Prisma.DbNull,
@@ -240,10 +239,6 @@ export class ReportService {
     <div class="stat-box">
       <div class="stat-value">${formatCurrency(report.totalGrowthValue ?? 0)}</div>
       <div class="stat-label">Growth Value</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-value">${(report.fteRedeployable ?? 0).toFixed(1)}</div>
-      <div class="stat-label">FTEs Redeployable</div>
     </div>
   </div>
 
