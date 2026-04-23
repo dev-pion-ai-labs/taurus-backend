@@ -365,21 +365,41 @@ model TransformationReport {
   organizationId       String       @map("organization_id")
   status               ReportStatus @default(GENERATING)
 
-  // Scores
+  // Scores (legacy; populated by mapper for backward-compatible frontend)
   overallScore         Int?         @map("overall_score")
   maturityLevel        String?      @map("maturity_level")
 
-  // Financial
+  // Financial (legacy totals; superseded by ranged fields below)
   totalEfficiencyValue Float?       @map("total_efficiency_value")
   totalGrowthValue     Float?       @map("total_growth_value")
   totalAiValue         Float?       @map("total_ai_value")
   fteRedeployable      Float?       @map("fte_redeployable")
 
-  // Structured content (JSON)
+  // Briefing framing (new)
+  companyType          String?      @map("company_type")
+  primaryAudience      String?      @map("primary_audience")
+  reportGoal           String?      @map("report_goal")
+  thesis               String?      @db.Text
+  bigMove              String?      @map("big_move") @db.Text
+
+  // Ranged value (new)
+  totalAiValueLow      Float?       @map("total_ai_value_low")
+  totalAiValueHigh     Float?       @map("total_ai_value_high")
+  fteRedeployableBand  String?      @map("fte_redeployable_band")
+  confidenceNote       String?      @map("confidence_note")
+
+  // Structured content (JSON) — legacy
   executiveSummary     Json?        @map("executive_summary")
   departmentScores     Json?        @map("department_scores")
   recommendations      Json?
   implementationPlan   Json?        @map("implementation_plan")
+
+  // Structured content (JSON) — new briefing shape
+  snapshot             Json?        @map("snapshot")
+  executiveBrief       Json?        @map("executive_brief")
+  decisionBlocks       Json?        @map("decision_blocks")
+  assumptionsAndLimits Json?        @map("assumptions_and_limits")
+  peerContext          Json?        @map("peer_context")
 
   generatedAt          DateTime?    @map("generated_at")
   createdAt            DateTime     @default(now()) @map("created_at")

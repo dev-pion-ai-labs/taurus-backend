@@ -277,10 +277,98 @@ export class TrackerService {
       throw new ConflictException('Report is not completed yet');
     }
 
-    const recommendations = (report.recommendations as any[]) || [];
-    const implementationPlan = (report.implementationPlan as any[]) || [];
+    // Check for existing imports from this session
+    const existing = await this.prisma.transformationAction.findMany({
+      where: { organizationId, sessionId },
+      select: { sourceRecommendationId: true },
+    });
+    const existingIds = new Set(
+      existing
+        .map((e) => e.sourceRecommendationId)
+        .filter((id): id is string => id !== null),
+    );
 
-    // Build phase lookup from implementation plan
+    // Prefer the new decision-block shape; fall back to legacy recommendations
+    // for reports generated before the briefing migration.
+    const decisionBlocks = (report.decisionBlocks as any[]) || [];
+    const toCreate =
+      decisionBlocks.length > 0
+        ? this.buildImportRowsFromDecisionBlocks(
+            decisionBlocks,
+            report.reportGoal,
+            existingIds,
+            organizationId,
+            sessionId,
+          )
+        : this.buildImportRowsFromLegacyRecommendations(
+            (report.recommendations as any[]) || [],
+            (report.implementationPlan as any[]) || [],
+            existingIds,
+            organizationId,
+            sessionId,
+          );
+
+    if (toCreate.length === 0) {
+      return { imported: 0, skipped: existingIds.size };
+    }
+
+    await this.prisma.transformationAction.createMany({
+      data: toCreate as any,
+    });
+
+    return { imported: toCreate.length, skipped: existing.length };
+  }
+
+  private buildImportRowsFromDecisionBlocks(
+    decisionBlocks: any[],
+    reportGoal: string | null,
+    existingIds: Set<string>,
+    organizationId: string,
+    sessionId: string,
+  ) {
+    const category = this.categoryForGoal(reportGoal);
+    const rows: any[] = [];
+    let orderIndex = 0;
+
+    for (const block of decisionBlocks) {
+      const actions = block.ninetyDayPlan?.actions || [];
+      const perActionValue =
+        actions.length > 0
+          ? Math.round((block.value?.high || 0) / actions.length)
+          : 0;
+      const priority = this.priorityFromValue(block.value?.high);
+
+      for (const [idx, action] of actions.entries()) {
+        const sourceId = `${block.id || 'block'}-${idx}`;
+        if (existingIds.has(sourceId)) continue;
+
+        rows.push({
+          organizationId,
+          sessionId,
+          sourceRecommendationId: sourceId,
+          title: action.title,
+          description: `${block.decision}${action.successSignal ? ' — ' + action.successSignal : ''}`,
+          department: action.ownerRole || block.ownership?.accountableRole || null,
+          category,
+          priority,
+          estimatedValue: perActionValue,
+          estimatedEffort: this.mapEffortFromWeek(action.week),
+          phase: 1, // 90-day plan items are phase-1 by definition
+          orderIndex: orderIndex++,
+        });
+      }
+    }
+
+    return rows;
+  }
+
+  private buildImportRowsFromLegacyRecommendations(
+    recommendations: any[],
+    implementationPlan: any[],
+    existingIds: Set<string>,
+    organizationId: string,
+    sessionId: string,
+  ) {
     const phaseLookup = new Map<string, number>();
     for (const phase of implementationPlan) {
       for (const action of phase.actions || []) {
@@ -288,14 +376,7 @@ export class TrackerService {
       }
     }
 
-    // Check for existing imports from this session
-    const existing = await this.prisma.transformationAction.findMany({
-      where: { organizationId, sessionId },
-      select: { sourceRecommendationId: true },
-    });
-    const existingIds = new Set(existing.map((e) => e.sourceRecommendationId));
-
-    const toCreate = recommendations
+    return recommendations
       .filter((rec) => !existingIds.has(rec.id))
       .map((rec, index) => ({
         organizationId,
@@ -311,16 +392,34 @@ export class TrackerService {
         phase: phaseLookup.get(rec.title) || null,
         orderIndex: index,
       }));
+  }
 
-    if (toCreate.length === 0) {
-      return { imported: 0, skipped: existingIds.size };
+  private categoryForGoal(goal: string | null): string {
+    switch (goal) {
+      case 'Explore':
+        return 'GROWTH';
+      case 'Validate':
+        return 'INTELLIGENCE';
+      case 'Decide':
+      case 'Align':
+      default:
+        return 'EFFICIENCY';
     }
+  }
 
-    await this.prisma.transformationAction.createMany({
-      data: toCreate as any,
-    });
+  private priorityFromValue(value: number | undefined): string {
+    if (!value || value <= 0) return 'MEDIUM';
+    if (value >= 5_000_000) return 'HIGH';
+    if (value >= 1_000_000) return 'MEDIUM';
+    return 'LOW';
+  }
 
-    return { imported: toCreate.length, skipped: existing.length };
+  private mapEffortFromWeek(week: string | undefined): string | null {
+    if (!week) return 'WEEKS';
+    const lowered = week.toLowerCase();
+    if (lowered.includes('quarter') || lowered.includes('month')) return 'MONTHS';
+    if (lowered.includes('week 1') || lowered.includes('1-2')) return 'DAYS';
+    return 'WEEKS';
   }
 
   // ── Sprints ─────────────────────────────────────────────

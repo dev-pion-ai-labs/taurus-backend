@@ -67,7 +67,8 @@ export class AnalysisProcessor extends WorkerHost {
           `[${reportId}] AI generation completed in ${((Date.now() - aiStart) / 1000).toFixed(1)}s — score: ${reportData.overallScore}, ${reportData.departmentScores.length} depts, ${reportData.recommendations.length} recs`,
         );
 
-        // Calculate financial totals
+        // Legacy totals (derived from the projected department scores for
+        // backward compatibility with the current dashboard)
         const totalEfficiencyValue = reportData.departmentScores.reduce(
           (sum, d) => sum + (d.efficiencyValue || 0),
           0,
@@ -77,12 +78,20 @@ export class AnalysisProcessor extends WorkerHost {
           0,
         );
 
+        // New briefing shape — these are the source of truth going forward
+        const briefing = reportData.briefing;
+        const valueSummary = briefing.executiveBrief.valueSummary;
+        const totalAiValueLow = valueSummary.low;
+        const totalAiValueHigh = valueSummary.high;
+        const valueMidpoint = Math.round((totalAiValueLow + totalAiValueHigh) / 2);
+
         // Save report
         const saveStart = Date.now();
         await this.prisma.transformationReport.update({
           where: { id: reportId },
           data: {
             status: 'COMPLETED',
+            // Legacy fields (kept populated for current frontend)
             overallScore: reportData.overallScore,
             maturityLevel: reportData.maturityLevel,
             totalEfficiencyValue,
@@ -93,12 +102,27 @@ export class AnalysisProcessor extends WorkerHost {
             departmentScores: reportData.departmentScores as any,
             recommendations: reportData.recommendations as any,
             implementationPlan: reportData.implementationPlan as any,
+            // New briefing fields
+            companyType: briefing.companyType,
+            primaryAudience: briefing.primaryAudience,
+            reportGoal: briefing.reportGoal,
+            thesis: briefing.executiveBrief.thesis,
+            bigMove: briefing.executiveBrief.bigMove,
+            totalAiValueLow,
+            totalAiValueHigh,
+            fteRedeployableBand: briefing.executiveBrief.fteBand,
+            confidenceNote: valueSummary.confidenceNote,
+            snapshot: briefing.snapshot as any,
+            executiveBrief: briefing.executiveBrief as any,
+            decisionBlocks: briefing.decisionBlocks as any,
+            assumptionsAndLimits: briefing.assumptionsAndLimitations as any,
+            peerContext: briefing.peerContext as any,
             generatedAt: new Date(),
           },
         });
 
         this.logger.log(
-          `[${reportId}] Report saved in ${Date.now() - saveStart}ms. Total: ${((Date.now() - start) / 1000).toFixed(1)}s | Value: $${(totalEfficiencyValue + totalGrowthValue).toLocaleString()}`,
+          `[${reportId}] Report saved in ${Date.now() - saveStart}ms. Total: ${((Date.now() - start) / 1000).toFixed(1)}s | Value range: $${totalAiValueLow.toLocaleString()}-$${totalAiValueHigh.toLocaleString()} (midpoint $${valueMidpoint.toLocaleString()}) | Audience: ${briefing.primaryAudience} | CompanyType: ${briefing.companyType}`,
         );
 
         // Auto-seed Tracker actions from the report's recommendations so the
@@ -134,7 +158,7 @@ export class AnalysisProcessor extends WorkerHost {
               sessionId,
               overallScore: reportData.overallScore,
               maturityLevel: reportData.maturityLevel,
-              totalValue: totalEfficiencyValue + totalGrowthValue,
+              totalValue: valueMidpoint,
             });
           }
         } catch (notifError) {
@@ -149,7 +173,7 @@ export class AnalysisProcessor extends WorkerHost {
             organizationId,
             reportData.overallScore,
             reportData.maturityLevel,
-            totalEfficiencyValue + totalGrowthValue,
+            valueMidpoint,
           )
           .catch(() => {});
       } catch (error) {
