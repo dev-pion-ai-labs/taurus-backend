@@ -1,6 +1,18 @@
 FROM node:20-alpine AS base
 WORKDIR /app
 
+# Chromium + fonts for Puppeteer (PDF export). The Puppeteer npm package
+# skips its bundled Chromium download; we point it at the system binary.
+RUN apk add --no-cache \
+      chromium \
+      nss \
+      freetype \
+      harfbuzz \
+      ca-certificates \
+      ttf-freefont
+ENV PUPPETEER_SKIP_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 FROM base AS deps
 COPY package.json package-lock.json ./
 RUN npm ci

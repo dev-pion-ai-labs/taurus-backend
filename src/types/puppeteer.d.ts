@@ -2,6 +2,7 @@ declare module 'puppeteer' {
   interface LaunchOptions {
     headless?: boolean | 'shell';
     args?: string[];
+    executablePath?: string;
   }
 
   interface PDFOptions {
