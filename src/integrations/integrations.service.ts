@@ -9,6 +9,41 @@ import { IntegrationProvider, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
 import { getProviderConfig } from './oauth-providers';
 
+/**
+ * Translate provider error strings (or raw error bodies) into user-actionable
+ * messages. Most common case: an OAuth app is in development / single-workspace
+ * mode in the provider's developer dashboard, so end users can't install it
+ * into their own workspace. Falls back to null for callers to show a generic
+ * message.
+ */
+function translateOAuthError(
+  provider: IntegrationProvider,
+  raw: string,
+): string | null {
+  const text = raw.toLowerCase();
+  // Provider-specific "app is not distributed / not approved for your workspace"
+  if (
+    text.includes('invalid_team_for_non_distributed_app') ||
+    text.includes('access_denied') ||
+    text.includes('not_distributed')
+  ) {
+    return `${provider} hasn't been published for installation in other workspaces yet — the workspace admin needs to enable distribution in the ${provider} app settings.`;
+  }
+  if (provider === 'NOTION' && text.includes('unauthorized')) {
+    return 'This Notion integration is set to "Internal" — switch it to "Public" in your Notion integration settings so other workspaces can install it.';
+  }
+  if (
+    provider === 'GOOGLE_DRIVE' &&
+    (text.includes('access_denied') || text.includes('admin_policy_enforced'))
+  ) {
+    return 'Google blocked this connection — either the OAuth consent screen is still in "Testing" mode or your domain admin disallows third-party apps.';
+  }
+  if (text.includes('invalid_grant')) {
+    return `Authorization code was already used or expired — please retry connecting ${provider}.`;
+  }
+  return null;
+}
+
 @Injectable()
 export class IntegrationsService {
   private readonly logger = new Logger(IntegrationsService.name);
@@ -264,7 +299,8 @@ export class IntegrationsService {
         `Token exchange failed for ${provider}: ${response.status} ${errorText}`,
       );
       throw new BadRequestException(
-        `Failed to connect ${provider} — invalid or expired authorization code`,
+        translateOAuthError(provider, errorText) ??
+          `Failed to connect ${provider} — invalid or expired authorization code`,
       );
     }
 
@@ -285,8 +321,9 @@ export class IntegrationsService {
           this.logger.error(
             `Slack OAuth returned ok:false: ${JSON.stringify(data).slice(0, 300)}`,
           );
+          const code = (data.error as string) || 'unknown error';
           throw new BadRequestException(
-            `Slack OAuth failed: ${(data.error as string) || 'unknown error'}`,
+            translateOAuthError('SLACK', code) ?? `Slack OAuth failed: ${code}`,
           );
         }
         const authedUser = data.authed_user as Record<string, unknown> | undefined;
