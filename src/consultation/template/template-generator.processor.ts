@@ -12,17 +12,24 @@ import {
 import { TemplateService } from './template.service';
 
 /**
- * Per-scope batch sizes for AI question generation. Narrower scopes ask fewer
- * questions because the surface area is smaller; ORG keeps the original
- * 4-5 / 2-3 defaults by leaving the entries undefined.
+ * Per-scope batch sizes for AI question generation.
+ *
+ * ORG sessions load BASE template questions first (~6-8 org-wide intro
+ * questions) and use the personalized layer to top up with company-specific
+ * questions, so the initial batch is small (defaults to 4-5).
+ *
+ * Scoped sessions (DEPARTMENT / WORKFLOW) skip the BASE template entirely —
+ * the personalized batch is the ENTIRE source of questions, so we ask for a
+ * larger initial set that fills most of the per-scope cap, leaving only a
+ * couple of slots for adaptive follow-ups at the end.
  */
 const INITIAL_BATCH_BY_SCOPE: Record<
   ConsultationScope,
   { count: string; minExpected: number } | undefined
 > = {
   ORG: undefined,
-  DEPARTMENT: { count: '2-3', minExpected: 2 },
-  WORKFLOW: { count: '1-2', minExpected: 1 },
+  DEPARTMENT: { count: '8-10', minExpected: 6 }, // cap 12 → leave ~2 for adaptive
+  WORKFLOW: { count: '5-6', minExpected: 4 },    // cap 8  → leave ~2 for adaptive
 };
 
 const ADAPTIVE_BATCH_BY_SCOPE: Record<
@@ -31,7 +38,7 @@ const ADAPTIVE_BATCH_BY_SCOPE: Record<
 > = {
   ORG: undefined,
   DEPARTMENT: { count: '1-2', minExpected: 1 },
-  WORKFLOW: { count: '1', minExpected: 1 },
+  WORKFLOW: { count: '1-2', minExpected: 1 },
 };
 
 interface TemplateGenerationJob {
@@ -218,11 +225,16 @@ export class TemplateGeneratorProcessor extends WorkerHost {
     );
 
     try {
-      // Verify session is still active
+      // Verify session is still active. Scoped sessions start in
+      // PENDING_TEMPLATE — they wait for this batch before going IN_PROGRESS.
       const session = await this.prisma.consultationSession.findUnique({
         where: { id: sessionId },
       });
-      if (!session || session.status !== 'IN_PROGRESS') {
+      if (
+        !session ||
+        (session.status !== 'IN_PROGRESS' &&
+          session.status !== 'PENDING_TEMPLATE')
+      ) {
         this.logger.log(`[${sessionId}] Session no longer active, skipping`);
         return;
       }
@@ -245,6 +257,15 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         'PERSONALIZED',
       );
 
+      // For scoped sessions that were waiting on this batch, flip to
+      // IN_PROGRESS so the frontend leaves the "generating questions" screen.
+      if (session.status === 'PENDING_TEMPLATE' && added > 0) {
+        await this.prisma.consultationSession.update({
+          where: { id: sessionId },
+          data: { status: 'IN_PROGRESS' },
+        });
+      }
+
       this.logger.log(
         `[${sessionId}] Personalized batch (scope=${session.scope}, count=${batchOpts?.count ?? '4-5'}): ${added} added in ${((Date.now() - start) / 1000).toFixed(1)}s`,
       );
@@ -253,8 +274,24 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         `[${sessionId}] Personalized batch generation failed: ${(error as Error).message}`,
         (error as Error).stack,
       );
-      // Don't throw — session continues with core questions only
-      // The adaptive follow-up mechanism will generate more as needed
+      // Org-level sessions still have BASE questions to answer, so the
+      // adaptive layer can recover later. Scoped sessions have no questions
+      // at all if this batch failed — mark the session FAILED so the
+      // frontend's pending-state timeout doesn't strand the user.
+      try {
+        const fresh = await this.prisma.consultationSession.findUnique({
+          where: { id: sessionId },
+          select: { status: true },
+        });
+        if (fresh?.status === 'PENDING_TEMPLATE') {
+          await this.prisma.consultationSession.update({
+            where: { id: sessionId },
+            data: { status: 'FAILED' },
+          });
+        }
+      } catch {
+        // Best-effort — if we can't update we'd rather leave the original log.
+      }
     }
   }
 

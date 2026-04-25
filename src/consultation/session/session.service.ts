@@ -89,14 +89,18 @@ export class SessionService {
     const scope = dto.scope ?? ConsultationScope.ORG;
     await this.validateScopeOwnership(orgId, scope, dto.departmentId, dto.workflowId);
 
-    // Always grab the base template for core questions
+    // Base template is required by the schema (baseTemplateId is non-nullable)
+    // but its questions are only loaded for ORG-level sessions. Scoped sessions
+    // skip the org-wide intro questions entirely — every question must be
+    // grounded in the scoped department/workflow record.
     const baseTemplate = await this.templateService.getBaseTemplate();
+    const isScoped = scope !== ConsultationScope.ORG;
 
     const session = await this.prisma.consultationSession.create({
       data: {
         organizationId: orgId,
         userId,
-        status: 'IN_PROGRESS',
+        status: isScoped ? 'PENDING_TEMPLATE' : 'IN_PROGRESS',
         scope,
         departmentId: scope === ConsultationScope.ORG ? null : dto.departmentId ?? null,
         workflowId: scope === ConsultationScope.WORKFLOW ? dto.workflowId ?? null : null,
@@ -105,26 +109,31 @@ export class SessionService {
       },
     });
 
-    // 1. Add predefined core questions immediately (user sees these first)
-    let orderIndex = 0;
-    const coreQuestions = baseTemplate.questions.map((q) => ({
-      sessionId: session.id,
-      questionId: q.id,
-      section: 'BASE' as const,
-      orderIndex: orderIndex++,
-    }));
+    let coreCount = 0;
+    if (!isScoped) {
+      // Org-level: load BASE template's predefined org-wide questions immediately.
+      // User sees these while the personalized batch generates in background.
+      let orderIndex = 0;
+      const coreQuestions = baseTemplate.questions.map((q) => ({
+        sessionId: session.id,
+        questionId: q.id,
+        section: 'BASE' as const,
+        orderIndex: orderIndex++,
+      }));
+      await this.prisma.sessionQuestion.createMany({ data: coreQuestions });
+      coreCount = coreQuestions.length;
+    }
 
-    await this.prisma.sessionQuestion.createMany({ data: coreQuestions });
-
-    // 2. Queue personalized question generation in background
-    //    These will be ready by the time user finishes core questions
+    // Queue personalized question generation. For scoped sessions, this is
+    // the ENTIRE source of questions — the processor will flip the session to
+    // IN_PROGRESS once the first batch lands.
     await this.templateQueue.add('generate-personalized-batch', {
       sessionId: session.id,
       organizationId: orgId,
     });
 
     this.logger.log(
-      `Session ${session.id} started with ${coreQuestions.length} core questions, personalized batch queued`,
+      `Session ${session.id} started (scope=${scope}) with ${coreCount} core questions; personalized batch queued`,
     );
 
     return this.getSession(session.id, userId);
