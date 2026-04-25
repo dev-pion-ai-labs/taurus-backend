@@ -9,6 +9,7 @@ import {
   UseGuards,
   ParseUUIDPipe,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IntegrationProvider } from '@prisma/client';
@@ -81,6 +82,14 @@ export class IntegrationsController {
     this.requireOrg(user.organizationId);
     const provider = this.parseProvider(providerRaw);
 
+    // Verify state if present — defends against another tab/session swapping
+    // a foreign `code` into this user's callback. Tolerant for now (state is
+    // optional) so existing in-flight callbacks don't break; the frontend
+    // always forwards it.
+    if (dto.state) {
+      this.verifyState(dto.state, user.id, user.organizationId, providerRaw);
+    }
+
     const redirectUri =
       dto.redirectUri || `${process.env.CORS_ORIGIN || 'http://localhost:3001'}/settings?tab=integrations`;
 
@@ -141,5 +150,31 @@ export class IntegrationsController {
       );
     }
     return upper;
+  }
+
+  private verifyState(
+    rawState: string,
+    expectedUserId: string,
+    expectedOrgId: string,
+    expectedProvider: string,
+  ): void {
+    let decoded: { orgId?: string; userId?: string; provider?: string };
+    try {
+      decoded = JSON.parse(
+        Buffer.from(rawState, 'base64url').toString('utf-8'),
+      );
+    } catch {
+      throw new ForbiddenException('OAuth state is malformed');
+    }
+
+    if (
+      decoded.userId !== expectedUserId ||
+      decoded.orgId !== expectedOrgId ||
+      decoded.provider !== expectedProvider
+    ) {
+      throw new ForbiddenException(
+        'OAuth state mismatch — this callback does not belong to the current session',
+      );
+    }
   }
 }
