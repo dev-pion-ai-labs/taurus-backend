@@ -142,19 +142,91 @@ export class SessionService {
       coreCount = coreQuestions.length;
     }
 
-    // Queue personalized question generation. For scoped + follow-up sessions,
-    // this is the ENTIRE source of questions — the processor will flip the
-    // session to IN_PROGRESS once the first batch lands.
+    // For scoped sessions, check if pre-gen starter questions are cached on
+    // the entity record. If so, insert them as the first session questions
+    // and skip the PENDING wait — the user lands directly on Q1.
+    let preGenCount = 0;
+    if (isScoped) {
+      preGenCount = await this.consumePreGeneratedQuestions(
+        session.id,
+        scope,
+        dto.departmentId,
+        dto.workflowId,
+      );
+      if (preGenCount > 0) {
+        // We already have starter questions; flip the session straight to
+        // IN_PROGRESS so the frontend skips the waiting screen.
+        await this.prisma.consultationSession.update({
+          where: { id: session.id },
+          data: { status: 'IN_PROGRESS' },
+        });
+      }
+    }
+
+    // Queue personalized question generation. When pre-gen seeded the start,
+    // the processor will produce a smaller top-up batch (driven by
+    // PREGEN_TOPUP_BATCH_BY_SCOPE in the processor). Otherwise it produces
+    // the full initial batch and flips PENDING → IN_PROGRESS.
     await this.templateQueue.add('generate-personalized-batch', {
       sessionId: session.id,
       organizationId: orgId,
     });
 
     this.logger.log(
-      `Session ${session.id} started (scope=${scope}, followUp=${isFollowUpOrg}) with ${coreCount} core questions; personalized batch queued`,
+      `Session ${session.id} started (scope=${scope}, followUp=${isFollowUpOrg}, preGen=${preGenCount}) with ${coreCount} core questions; personalized batch queued`,
     );
 
     return this.getSession(session.id, userId);
+  }
+
+  /**
+   * Reads cached starter questions off the scoped Department or Workflow
+   * record (set by the pre-gen queue job at entity create time) and inserts
+   * them as SessionQuestion rows. Returns the count inserted (0 if none).
+   */
+  private async consumePreGeneratedQuestions(
+    sessionId: string,
+    scope: ConsultationScope,
+    departmentId?: string,
+    workflowId?: string,
+  ): Promise<number> {
+    type PreGenQuestion = {
+      questionText: string;
+      questionType: string;
+      options: string[] | null;
+    };
+
+    let raw: unknown = null;
+    if (scope === ConsultationScope.DEPARTMENT && departmentId) {
+      const dept = await this.prisma.department.findUnique({
+        where: { id: departmentId },
+        select: { preGeneratedQuestions: true },
+      });
+      raw = dept?.preGeneratedQuestions ?? null;
+    } else if (scope === ConsultationScope.WORKFLOW && workflowId) {
+      const wf = await this.prisma.workflow.findUnique({
+        where: { id: workflowId },
+        select: { preGeneratedQuestions: true },
+      });
+      raw = wf?.preGeneratedQuestions ?? null;
+    }
+
+    if (!Array.isArray(raw) || raw.length === 0) return 0;
+    const questions = raw as PreGenQuestion[];
+
+    await this.prisma.sessionQuestion.createMany({
+      data: questions.map((q, i) => ({
+        sessionId,
+        section: 'PERSONALIZED' as const,
+        orderIndex: i,
+        isAdaptive: true,
+        adaptiveText: q.questionText,
+        adaptiveType: q.questionType,
+        adaptiveOptions: (q.options as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+      })),
+    });
+
+    return questions.length;
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -637,6 +709,35 @@ export class SessionService {
         answer: (sq.answer as any)?.value ?? sq.answer,
         completedAt,
       })),
+    };
+  }
+
+  /**
+   * Build an AdaptiveQuestionContext for entity-create-time pre-generation,
+   * before any session exists. Same shape as buildAdaptiveContext but with
+   * empty previousQA and isFollowUp=false. Used by the queue processor when
+   * a new Department/Workflow is created so we can cache 2-3 starter
+   * questions on the entity record.
+   */
+  async buildPrePopulationContext(
+    scope: ConsultationScope,
+    organizationId: string,
+    departmentId?: string,
+    workflowId?: string,
+  ): Promise<AdaptiveQuestionContext> {
+    const orgCtx = await this.getOrgContext(organizationId);
+    const { scopedDepartment, scopedWorkflow } = await this.loadScopedContext(
+      scope,
+      departmentId ?? null,
+      workflowId ?? null,
+    );
+
+    return {
+      ...orgCtx,
+      scope,
+      scopedDepartment,
+      scopedWorkflow,
+      previousQA: [],
     };
   }
 
