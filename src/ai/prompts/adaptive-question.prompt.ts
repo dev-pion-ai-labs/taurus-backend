@@ -50,12 +50,60 @@ export interface AdaptiveQuestionContext {
   scope?: 'ORG' | 'DEPARTMENT' | 'WORKFLOW';
   scopedDepartment?: ScopedDepartmentContext;
   scopedWorkflow?: ScopedWorkflowContext;
+  /**
+   * True when this is NOT the org's first consultation (an earlier ORG-level
+   * session has been completed). Drives a different prompt that avoids
+   * re-asking baseline questions.
+   */
+  isFollowUp?: boolean;
+  /**
+   * Most-recent answered questions from prior consultation sessions for the
+   * same org — only populated when isFollowUp. Used as grounding so the AI
+   * can ask "what's changed since X?" instead of repeating baselines.
+   */
+  priorOrgAnswers?: Array<{
+    question: string;
+    answer: unknown;
+    completedAt: string;
+  }>;
   previousQA: Array<{
     question: string;
     questionType: string;
     answer: unknown;
     section: string;
   }>;
+}
+
+/**
+ * Build a follow-up preamble when this org has already completed at least one
+ * consultation. Includes the most recent prior answers as grounding so the AI
+ * can ask "what's changed?" instead of re-asking baseline questions. Returns
+ * empty string when isFollowUp is false. Null/empty answers are omitted.
+ */
+export function buildFollowUpPreamble(ctx: AdaptiveQuestionContext): string {
+  if (!ctx.isFollowUp) return '';
+
+  const priorBlock =
+    ctx.priorOrgAnswers && ctx.priorOrgAnswers.length > 0
+      ? `\nPrior consultation answers (most recent first):\n${ctx.priorOrgAnswers
+          .slice(0, 20)
+          .map((qa, i) => {
+            const ans =
+              typeof qa.answer === 'object'
+                ? JSON.stringify(qa.answer)
+                : String(qa.answer);
+            return `  ${i + 1}. Q: ${qa.question}\n     A: ${ans}`;
+          })
+          .join('\n')}\n`
+      : '\n(No prior answers were retained, but this org has completed a consultation before.)\n';
+
+  return `\n\n═══ FOLLOW-UP CONSULTATION ═══
+This org has consulted with us before. Do **NOT** re-ask the baseline questions they have already answered (industry, business description, current tools, top challenges, primary goals). Instead, your questions must:
+  1. Probe what has CHANGED since the prior consultation (new tools, new constraints, shifted priorities).
+  2. Dig DEEPER into ambiguities or contradictions in the prior answers.
+  3. Explore areas that were NOT covered before (newly relevant given current state).
+${priorBlock}═══════════════════════════════
+`;
 }
 
 /**
@@ -148,8 +196,9 @@ Website Intelligence:
 
   const scopePreamble = buildScopePreamble(ctx);
   const scopeBlock = scopePreamble ? `\n\n${scopePreamble}\n` : '';
+  const followUpBlock = buildFollowUpPreamble(ctx);
 
-  const user = `Generate ${count} personalized consultation questions for this company.${scopeBlock}
+  const user = `Generate ${count} personalized consultation questions for this company.${scopeBlock}${followUpBlock}
 
 Company Profile:
 - Name: ${ctx.organization.name}

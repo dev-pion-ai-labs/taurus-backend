@@ -90,17 +90,34 @@ export class SessionService {
     await this.validateScopeOwnership(orgId, scope, dto.departmentId, dto.workflowId);
 
     // Base template is required by the schema (baseTemplateId is non-nullable)
-    // but its questions are only loaded for ORG-level sessions. Scoped sessions
-    // skip the org-wide intro questions entirely — every question must be
-    // grounded in the scoped department/workflow record.
+    // but its questions are only loaded for an org's FIRST-EVER ORG-level
+    // consultation. Scoped sessions and follow-up org sessions skip the
+    // BASE intro questions entirely — every question is AI-generated and
+    // grounded in either the scope record or the prior session's answers.
     const baseTemplate = await this.templateService.getBaseTemplate();
     const isScoped = scope !== ConsultationScope.ORG;
+
+    // For ORG scope, detect whether this org has ever completed a
+    // consultation before. If yes, we treat it like a scoped session
+    // (skip BASE, hydrate AI prompt with prior answers).
+    let isFollowUpOrg = false;
+    if (!isScoped) {
+      const priorCompletedCount = await this.prisma.consultationSession.count({
+        where: {
+          organizationId: orgId,
+          scope: ConsultationScope.ORG,
+          status: 'COMPLETED',
+        },
+      });
+      isFollowUpOrg = priorCompletedCount > 0;
+    }
+    const skipBase = isScoped || isFollowUpOrg;
 
     const session = await this.prisma.consultationSession.create({
       data: {
         organizationId: orgId,
         userId,
-        status: isScoped ? 'PENDING_TEMPLATE' : 'IN_PROGRESS',
+        status: skipBase ? 'PENDING_TEMPLATE' : 'IN_PROGRESS',
         scope,
         departmentId: scope === ConsultationScope.ORG ? null : dto.departmentId ?? null,
         workflowId: scope === ConsultationScope.WORKFLOW ? dto.workflowId ?? null : null,
@@ -110,9 +127,10 @@ export class SessionService {
     });
 
     let coreCount = 0;
-    if (!isScoped) {
-      // Org-level: load BASE template's predefined org-wide questions immediately.
-      // User sees these while the personalized batch generates in background.
+    if (!skipBase) {
+      // First-ever org consultation: load BASE template's predefined org-wide
+      // questions immediately. User sees these while the personalized batch
+      // generates in background.
       let orderIndex = 0;
       const coreQuestions = baseTemplate.questions.map((q) => ({
         sessionId: session.id,
@@ -124,16 +142,16 @@ export class SessionService {
       coreCount = coreQuestions.length;
     }
 
-    // Queue personalized question generation. For scoped sessions, this is
-    // the ENTIRE source of questions — the processor will flip the session to
-    // IN_PROGRESS once the first batch lands.
+    // Queue personalized question generation. For scoped + follow-up sessions,
+    // this is the ENTIRE source of questions — the processor will flip the
+    // session to IN_PROGRESS once the first batch lands.
     await this.templateQueue.add('generate-personalized-batch', {
       sessionId: session.id,
       organizationId: orgId,
     });
 
     this.logger.log(
-      `Session ${session.id} started (scope=${scope}) with ${coreCount} core questions; personalized batch queued`,
+      `Session ${session.id} started (scope=${scope}, followUp=${isFollowUpOrg}) with ${coreCount} core questions; personalized batch queued`,
     );
 
     return this.getSession(session.id, userId);
@@ -526,7 +544,12 @@ export class SessionService {
     const [session, answeredQuestions] = await Promise.all([
       this.prisma.consultationSession.findUniqueOrThrow({
         where: { id: sessionId },
-        select: { scope: true, departmentId: true, workflowId: true },
+        select: {
+          id: true,
+          scope: true,
+          departmentId: true,
+          workflowId: true,
+        },
       }),
       this.prisma.sessionQuestion.findMany({
         where: { sessionId, answeredAt: { not: null } },
@@ -541,11 +564,22 @@ export class SessionService {
       session.workflowId,
     );
 
+    // Follow-up detection: only meaningful for ORG-scope sessions. We pull the
+    // most recent prior COMPLETED ORG session's answered questions to feed the
+    // AI prompt as grounding ("here's what they told us last time, ask what's
+    // changed"). Limited to last 20 to keep prompt size bounded.
+    const { isFollowUp, priorOrgAnswers } =
+      session.scope === ConsultationScope.ORG
+        ? await this.loadPriorOrgAnswers(organizationId, session.id)
+        : { isFollowUp: false, priorOrgAnswers: undefined };
+
     return {
       ...orgCtx,
       scope: session.scope,
       scopedDepartment,
       scopedWorkflow,
+      isFollowUp,
+      priorOrgAnswers,
       previousQA: answeredQuestions.map((sq) => ({
         question: sq.isAdaptive
           ? sq.adaptiveText!
@@ -555,6 +589,53 @@ export class SessionService {
           : sq.question!.questionType,
         answer: (sq.answer as any)?.value ?? sq.answer,
         section: sq.section,
+      })),
+    };
+  }
+
+  /**
+   * Returns the most recent prior COMPLETED ORG-level consultation's answered
+   * questions, capped at 20. Excludes the current session.
+   */
+  private async loadPriorOrgAnswers(
+    organizationId: string,
+    currentSessionId: string,
+  ): Promise<{
+    isFollowUp: boolean;
+    priorOrgAnswers?: AdaptiveQuestionContext['priorOrgAnswers'];
+  }> {
+    const priorSession = await this.prisma.consultationSession.findFirst({
+      where: {
+        organizationId,
+        scope: ConsultationScope.ORG,
+        status: 'COMPLETED',
+        id: { not: currentSessionId },
+      },
+      orderBy: { completedAt: 'desc' },
+      select: { id: true, completedAt: true },
+    });
+
+    if (!priorSession) return { isFollowUp: false };
+
+    const answers = await this.prisma.sessionQuestion.findMany({
+      where: { sessionId: priorSession.id, answeredAt: { not: null } },
+      include: { question: true },
+      orderBy: { orderIndex: 'asc' },
+      take: 20,
+    });
+
+    const completedAt = priorSession.completedAt
+      ? priorSession.completedAt.toISOString()
+      : '';
+
+    return {
+      isFollowUp: true,
+      priorOrgAnswers: answers.map((sq) => ({
+        question: sq.isAdaptive
+          ? sq.adaptiveText!
+          : sq.question!.questionText,
+        answer: (sq.answer as any)?.value ?? sq.answer,
+        completedAt,
       })),
     };
   }
