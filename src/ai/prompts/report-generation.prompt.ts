@@ -1,6 +1,13 @@
 import type { ReportFraming } from '../types/report-briefing.types';
 
+export interface ReportScopeContext {
+  scope: 'ORG' | 'DEPARTMENT' | 'WORKFLOW';
+  departmentName?: string;
+  workflowName?: string;
+}
+
 export interface ReportGenerationContext {
+  scopeContext?: ReportScopeContext;
   organization: {
     name: string;
     industry: string;
@@ -90,8 +97,10 @@ export function buildBriefingPrompt(
     BLOCKER_GUIDANCE_BY_COMPANY_TYPE[framing.companyType] ??
     BLOCKER_GUIDANCE_BY_COMPANY_TYPE.Enterprise;
 
-  const system = `You are a senior strategist producing an executive briefing (NOT a SaaS recommendation report). Your output will be read by a ${framing.primaryAudience} at a ${framing.companyType} organization. The report goal is to help them ${framing.reportGoal.toUpperCase()}.
+  const scopeBanner = buildReportScopeBanner(ctx.scopeContext);
 
+  const system = `You are a senior strategist producing an executive briefing (NOT a SaaS recommendation report). Your output will be read by a ${framing.primaryAudience} at a ${framing.companyType} organization. The report goal is to help them ${framing.reportGoal.toUpperCase()}.
+${scopeBanner ? `\n${scopeBanner}\n` : ''}
 Return ONLY valid JSON matching the exact schema specified. No markdown, no commentary. Start with { and end with }.
 
 ═══ TONE FOR THIS AUDIENCE ═══
@@ -351,6 +360,36 @@ Remember:
 - No SaaS clichés. No emojis. No "Your recommendations have been added to the Tracker" handoff language.`;
 
   return { system, user };
+}
+
+/**
+ * Builds a deterministic scope banner from real DB names. Returns empty string
+ * for ORG scope. Used by both framing and briefing prompts so the model knows
+ * to keep recommendations within the scoped entity.
+ */
+export function buildReportScopeBanner(scope?: ReportScopeContext): string {
+  if (!scope || scope.scope === 'ORG') return '';
+  if (scope.scope === 'DEPARTMENT' && scope.departmentName) {
+    return `═══ REPORT SCOPE ═══
+This briefing is scoped to a SINGLE DEPARTMENT: **${scope.departmentName}**.
+- Every decision block, value range, and recommendation must apply only to this department.
+- Do NOT propose company-wide initiatives or recommendations for other departments.
+- Department signal must contain only this department.
+- Snapshot and executive brief must explicitly read as a department-level briefing.
+═══════════════════════════════`;
+  }
+  if (scope.scope === 'WORKFLOW' && scope.workflowName) {
+    return `═══ REPORT SCOPE ═══
+This briefing is scoped to a SINGLE WORKFLOW: **${scope.workflowName}**${
+      scope.departmentName ? ` (within the ${scope.departmentName} department)` : ''
+    }.
+- Every decision block, value range, and recommendation must apply only to this workflow.
+- Do NOT propose department-wide or company-wide initiatives.
+- Department signal must reference only the parent department, scoped to this workflow.
+- Snapshot and executive brief must explicitly read as a workflow-level briefing.
+═══════════════════════════════`;
+  }
+  return '';
 }
 
 /**

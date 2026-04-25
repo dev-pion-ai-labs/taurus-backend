@@ -305,20 +305,31 @@ model QuestionChallengeArea {
   @@map("question_challenge_areas")
 }
 
+enum ConsultationScope {
+  ORG
+  DEPARTMENT
+  WORKFLOW
+}
+
 model ConsultationSession {
-  id                 String        @id @default(uuid())
-  organizationId     String        @map("organization_id")
-  userId             String        @map("user_id")
-  status             SessionStatus @default(PENDING_TEMPLATE)
-  baseTemplateId     String        @map("base_template_id")
-  industryTemplateId String?       @map("industry_template_id")
-  startedAt          DateTime      @default(now()) @map("started_at")
-  completedAt        DateTime?     @map("completed_at")
-  createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
+  id                 String            @id @default(uuid())
+  organizationId     String            @map("organization_id")
+  userId             String            @map("user_id")
+  status             SessionStatus     @default(PENDING_TEMPLATE)
+  scope              ConsultationScope @default(ORG)
+  departmentId       String?           @map("department_id")
+  workflowId         String?           @map("workflow_id")
+  baseTemplateId     String            @map("base_template_id")
+  industryTemplateId String?           @map("industry_template_id")
+  startedAt          DateTime          @default(now()) @map("started_at")
+  completedAt        DateTime?         @map("completed_at")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
 
   organization     Organization         @relation(fields: [organizationId], references: [id])
   user             User                 @relation(fields: [userId], references: [id])
+  department       Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  workflow         Workflow?            @relation(fields: [workflowId], references: [id], onDelete: SetNull)
   baseTemplate     ConsultationTemplate @relation("BaseTemplate", fields: [baseTemplateId], references: [id])
   industryTemplate ConsultationTemplate? @relation("IndustryTemplate", fields: [industryTemplateId], references: [id])
   questions        SessionQuestion[]
@@ -327,6 +338,9 @@ model ConsultationSession {
 
   @@index([organizationId])
   @@index([status])
+  @@index([organizationId, scope])
+  @@index([departmentId])
+  @@index([workflowId])
   @@map("consultation_sessions")
 }
 
@@ -437,8 +451,9 @@ model Department {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  workflows    Workflow[]
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflows            Workflow[]
+  consultationSessions ConsultationSession[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -458,7 +473,8 @@ model Workflow {
   createdAt       DateTime        @default(now()) @map("created_at")
   updatedAt       DateTime        @updatedAt @map("updated_at")
 
-  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  department           Department            @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  consultationSessions ConsultationSession[]
 
   @@index([departmentId])
   @@map("workflows")

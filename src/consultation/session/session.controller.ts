@@ -13,7 +13,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SessionService } from './session.service';
 import { ReportService } from './report.service';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
-import { JwtAuthGuard, CurrentUser, PaginationQueryDto } from '../../common';
+import { StartSessionDto } from './dto/start-session.dto';
+import { ListSessionsQueryDto } from './dto/list-sessions-query.dto';
+import { JwtAuthGuard, CurrentUser } from '../../common';
 import type { Response } from 'express';
 
 @ApiTags('Consultation Sessions')
@@ -27,14 +29,17 @@ export class SessionController {
   ) {}
 
   @Post()
-  start(@CurrentUser() user: { id: string; organizationId: string }) {
-    return this.sessionService.startSession(user.id, user.organizationId);
+  start(
+    @CurrentUser() user: { id: string; organizationId: string },
+    @Body() dto: StartSessionDto = {},
+  ) {
+    return this.sessionService.startSession(user.id, user.organizationId, dto);
   }
 
   @Get()
   list(
     @CurrentUser('organizationId') orgId: string,
-    @Query() query: PaginationQueryDto,
+    @Query() query: ListSessionsQueryDto,
   ) {
     return this.sessionService.listSessions(orgId, query);
   }

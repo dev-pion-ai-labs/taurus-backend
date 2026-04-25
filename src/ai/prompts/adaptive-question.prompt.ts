@@ -1,3 +1,30 @@
+export interface ScopedDepartmentContext {
+  name: string;
+  headcount: number | null;
+  avgSalary: number | null;
+  notes: string | null;
+  workflows: Array<{
+    name: string;
+    description: string | null;
+    weeklyHours: number | null;
+    peopleInvolved: number | null;
+    automationLevel: string;
+    painPoints: string | null;
+    priority: string;
+  }>;
+}
+
+export interface ScopedWorkflowContext {
+  name: string;
+  description: string | null;
+  weeklyHours: number | null;
+  peopleInvolved: number | null;
+  automationLevel: string;
+  painPoints: string | null;
+  priority: string;
+  department: { name: string; headcount: number | null };
+}
+
 export interface AdaptiveQuestionContext {
   organization: {
     name: string;
@@ -20,12 +47,78 @@ export interface AdaptiveQuestionContext {
     products: string[];
     services: string[];
   };
+  scope?: 'ORG' | 'DEPARTMENT' | 'WORKFLOW';
+  scopedDepartment?: ScopedDepartmentContext;
+  scopedWorkflow?: ScopedWorkflowContext;
   previousQA: Array<{
     question: string;
     questionType: string;
     answer: unknown;
     section: string;
   }>;
+}
+
+/**
+ * Build a deterministic, grounded preamble from real DB fields when the
+ * consultation is scoped to a department or workflow. Returns an empty string
+ * for ORG scope. Null fields are omitted — never inferred.
+ */
+export function buildScopePreamble(ctx: AdaptiveQuestionContext): string {
+  if (!ctx.scope || ctx.scope === 'ORG') return '';
+
+  if (ctx.scope === 'DEPARTMENT' && ctx.scopedDepartment) {
+    const d = ctx.scopedDepartment;
+    const lines: string[] = [
+      `═══ CONSULTATION SCOPE: DEPARTMENT ═══`,
+      `This consultation is scoped to the **${d.name}** department only. Ground every question in facts about this department. Do NOT invent details that are not provided below.`,
+      `Department facts:`,
+      `- Name: ${d.name}`,
+    ];
+    if (d.headcount != null) lines.push(`- Headcount: ${d.headcount}`);
+    if (d.avgSalary != null) lines.push(`- Avg salary: $${d.avgSalary}`);
+    if (d.notes) lines.push(`- Notes: ${d.notes}`);
+    if (d.workflows.length) {
+      lines.push(`Workflows in this department:`);
+      for (const w of d.workflows) {
+        const parts: string[] = [`  - ${w.name}`];
+        if (w.weeklyHours != null) parts.push(`${w.weeklyHours}h/wk`);
+        if (w.peopleInvolved != null) parts.push(`${w.peopleInvolved} ppl`);
+        parts.push(`automation: ${w.automationLevel}`);
+        parts.push(`priority: ${w.priority}`);
+        if (w.painPoints) parts.push(`pain: ${w.painPoints}`);
+        lines.push(parts.join(' | '));
+      }
+    } else {
+      lines.push(`(no workflows mapped for this department)`);
+    }
+    lines.push(
+      `Constraint: every question must apply to this department's people, workflows, or processes. Do NOT ask company-wide questions.`,
+    );
+    return lines.join('\n');
+  }
+
+  if (ctx.scope === 'WORKFLOW' && ctx.scopedWorkflow) {
+    const w = ctx.scopedWorkflow;
+    const lines: string[] = [
+      `═══ CONSULTATION SCOPE: WORKFLOW ═══`,
+      `This consultation is scoped to a single workflow: **${w.name}** within the **${w.department.name}** department. Ground every question in this workflow only. Do NOT invent details.`,
+      `Workflow facts:`,
+      `- Name: ${w.name}`,
+      `- Department: ${w.department.name}${w.department.headcount != null ? ` (${w.department.headcount} ppl)` : ''}`,
+    ];
+    if (w.description) lines.push(`- Description: ${w.description}`);
+    if (w.weeklyHours != null) lines.push(`- Weekly hours: ${w.weeklyHours}`);
+    if (w.peopleInvolved != null) lines.push(`- People involved: ${w.peopleInvolved}`);
+    lines.push(`- Current automation level: ${w.automationLevel}`);
+    lines.push(`- Priority: ${w.priority}`);
+    if (w.painPoints) lines.push(`- Pain points: ${w.painPoints}`);
+    lines.push(
+      `Constraint: every question must apply to this single workflow. Do NOT ask department-wide or company-wide questions.`,
+    );
+    return lines.join('\n');
+  }
+
+  return '';
 }
 
 export interface GeneratedAdaptiveQuestion {
@@ -49,7 +142,10 @@ Website Intelligence:
 - Services: ${ctx.scrapedInsights.services.join(', ') || 'Unknown'}`
     : '';
 
-  const user = `Generate 4-5 personalized consultation questions for this company.
+  const scopePreamble = buildScopePreamble(ctx);
+  const scopeBlock = scopePreamble ? `\n\n${scopePreamble}\n` : '';
+
+  const user = `Generate 4-5 personalized consultation questions for this company.${scopeBlock}
 
 Company Profile:
 - Name: ${ctx.organization.name}
@@ -104,7 +200,10 @@ Website Intelligence:
 - Tech Stack: ${ctx.scrapedInsights.technologies.join(', ') || 'Unknown'}`
     : '';
 
-  const user = `Based on this consultation so far, generate 2-3 adaptive follow-up questions.
+  const scopePreamble = buildScopePreamble(ctx);
+  const scopeBlock = scopePreamble ? `\n\n${scopePreamble}\n` : '';
+
+  const user = `Based on this consultation so far, generate 2-3 adaptive follow-up questions.${scopeBlock}
 
 Company: ${ctx.organization.name} (${ctx.organization.industry}, ${ctx.organization.size || 'size unknown'})
 ${scrapedSection}

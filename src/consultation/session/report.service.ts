@@ -109,10 +109,33 @@ export class ReportService {
       throw new BadRequestException('Report is not completed yet');
     }
 
-    const org = await this.prisma.organization.findUniqueOrThrow({
-      where: { id: organizationId },
-      include: { industry: true },
-    });
+    const [org, sessionMeta] = await Promise.all([
+      this.prisma.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        include: { industry: true },
+      }),
+      this.prisma.consultationSession.findUnique({
+        where: { id: sessionId },
+        select: {
+          scope: true,
+          department: { select: { name: true } },
+          workflow: {
+            select: { name: true, department: { select: { name: true } } },
+          },
+        },
+      }),
+    ]);
+
+    const scopeLabel =
+      sessionMeta?.scope === 'DEPARTMENT' && sessionMeta.department
+        ? `Department: ${sessionMeta.department.name}`
+        : sessionMeta?.scope === 'WORKFLOW' && sessionMeta.workflow
+          ? `Workflow: ${sessionMeta.workflow.name}${
+              sessionMeta.workflow.department
+                ? ` · ${sessionMeta.workflow.department.name}`
+                : ''
+            }`
+          : null;
 
     const departmentScores = (report.departmentScores as any[]) || [];
     const recommendations = (report.recommendations as any[]) || [];
@@ -218,7 +241,7 @@ export class ReportService {
 <body>
   <div class="header">
     <div class="logo">TAURUS</div>
-    <h1>AI Transformation Report</h1>
+    <h1>AI Transformation Report${scopeLabel ? ` &mdash; ${scopeLabel}` : ''}</h1>
     <div class="date">${org.name} &mdash; ${generatedDate}</div>
   </div>
 

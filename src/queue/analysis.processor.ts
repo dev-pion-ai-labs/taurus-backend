@@ -321,37 +321,88 @@ export class AnalysisProcessor extends WorkerHost {
     sessionId: string,
     organizationId: string,
   ): Promise<ReportGenerationContext> {
-    const [org, onboarding, departments, sessionQuestions] = await Promise.all([
-      this.prisma.organization.findUniqueOrThrow({
-        where: { id: organizationId },
-        include: { industry: true },
-      }),
-      this.prisma.onboarding.findUnique({
-        where: { organizationId },
-        select: {
-          businessDescription: true,
-          revenueStreams: true,
-          selectedChallenges: true,
-          customChallenges: true,
-          selectedTools: true,
-          customTools: true,
-          selectedGoals: true,
-          customGoals: true,
-          availableData: true,
-          customDataSources: true,
-          scrapedContent: true,
-        },
-      }),
-      this.prisma.department.findMany({
-        where: { organizationId },
-        include: { workflows: true },
-      }),
-      this.prisma.sessionQuestion.findMany({
-        where: { sessionId, answeredAt: { not: null } },
-        include: { question: true },
-        orderBy: { orderIndex: 'asc' },
-      }),
-    ]);
+    const [session, org, onboarding, allDepartments, sessionQuestions] =
+      await Promise.all([
+        this.prisma.consultationSession.findUniqueOrThrow({
+          where: { id: sessionId },
+          select: {
+            scope: true,
+            departmentId: true,
+            workflowId: true,
+            department: { select: { id: true, name: true } },
+            workflow: {
+              select: {
+                id: true,
+                name: true,
+                departmentId: true,
+                department: { select: { id: true, name: true } },
+              },
+            },
+          },
+        }),
+        this.prisma.organization.findUniqueOrThrow({
+          where: { id: organizationId },
+          include: { industry: true },
+        }),
+        this.prisma.onboarding.findUnique({
+          where: { organizationId },
+          select: {
+            businessDescription: true,
+            revenueStreams: true,
+            selectedChallenges: true,
+            customChallenges: true,
+            selectedTools: true,
+            customTools: true,
+            selectedGoals: true,
+            customGoals: true,
+            availableData: true,
+            customDataSources: true,
+            scrapedContent: true,
+          },
+        }),
+        this.prisma.department.findMany({
+          where: { organizationId },
+          include: { workflows: true },
+        }),
+        this.prisma.sessionQuestion.findMany({
+          where: { sessionId, answeredAt: { not: null } },
+          include: { question: true },
+          orderBy: { orderIndex: 'asc' },
+        }),
+      ]);
+
+    // Narrow departments/workflows to the scoped entity. Org-scoped sessions
+    // get the full set; department-scoped sessions get just that department;
+    // workflow-scoped sessions get the parent department with only that workflow.
+    let departments = allDepartments;
+    if (session.scope === 'DEPARTMENT' && session.departmentId) {
+      departments = allDepartments.filter((d) => d.id === session.departmentId);
+    } else if (
+      session.scope === 'WORKFLOW' &&
+      session.workflowId &&
+      session.workflow
+    ) {
+      departments = allDepartments
+        .filter((d) => d.id === session.workflow!.departmentId)
+        .map((d) => ({
+          ...d,
+          workflows: d.workflows.filter((w) => w.id === session.workflowId),
+        }));
+    }
+
+    const scopeContext =
+      session.scope === 'DEPARTMENT' && session.department
+        ? {
+            scope: 'DEPARTMENT' as const,
+            departmentName: session.department.name,
+          }
+        : session.scope === 'WORKFLOW' && session.workflow
+          ? {
+              scope: 'WORKFLOW' as const,
+              workflowName: session.workflow.name,
+              departmentName: session.workflow.department?.name,
+            }
+          : { scope: 'ORG' as const };
 
     // Extract scraped website intelligence if available
     const scraped = onboarding?.scrapedContent as Record<string, any> | null;
@@ -372,6 +423,7 @@ export class AnalysisProcessor extends WorkerHost {
       : undefined;
 
     return {
+      scopeContext,
       organization: {
         name: org.name,
         industry: org.industry.name,
