@@ -38,6 +38,23 @@ const INITIAL_BATCH_BY_SCOPE: Record<
  */
 const FOLLOW_UP_ORG_INITIAL_BATCH = { count: '8-10', minExpected: 6 };
 
+/**
+ * Smaller batch when scoped sessions already have pre-generated starter
+ * questions on the entity record. The pre-gen makes the start instant; this
+ * top-up generates while the user answers the first 2-3 questions.
+ */
+const PREGEN_TOPUP_BATCH_BY_SCOPE: Record<
+  ConsultationScope,
+  { count: string; minExpected: number } | undefined
+> = {
+  ORG: undefined,
+  DEPARTMENT: { count: '6-7', minExpected: 5 },
+  WORKFLOW: { count: '3-4', minExpected: 2 },
+};
+
+/** Number of starter questions we generate per dept/workflow at create time. */
+const PREGEN_QUESTION_COUNT = { count: '2-3', minExpected: 2 };
+
 const ADAPTIVE_BATCH_BY_SCOPE: Record<
   ConsultationScope,
   { count: string; minExpected: number } | undefined
@@ -62,6 +79,16 @@ interface AdaptiveFollowUpJob {
   organizationId: string;
 }
 
+interface DepartmentPreGenJob {
+  departmentId: string;
+  organizationId: string;
+}
+
+interface WorkflowPreGenJob {
+  workflowId: string;
+  organizationId: string;
+}
+
 @Processor('template-generation', { concurrency: 3 })
 export class TemplateGeneratorProcessor extends WorkerHost {
   private readonly logger = new Logger(TemplateGeneratorProcessor.name);
@@ -77,7 +104,13 @@ export class TemplateGeneratorProcessor extends WorkerHost {
   }
 
   async process(
-    job: Job<TemplateGenerationJob | PersonalizedBatchJob | AdaptiveFollowUpJob>,
+    job: Job<
+      | TemplateGenerationJob
+      | PersonalizedBatchJob
+      | AdaptiveFollowUpJob
+      | DepartmentPreGenJob
+      | WorkflowPreGenJob
+    >,
   ) {
     if (job.name === 'generate-template') {
       return this.handleTemplateGeneration(job as Job<TemplateGenerationJob>);
@@ -85,6 +118,10 @@ export class TemplateGeneratorProcessor extends WorkerHost {
       return this.handlePersonalizedBatch(job as Job<PersonalizedBatchJob>);
     } else if (job.name === 'generate-adaptive-followup') {
       return this.handleAdaptiveFollowUp(job as Job<AdaptiveFollowUpJob>);
+    } else if (job.name === 'generate-prequestions-dept') {
+      return this.handleDepartmentPreGen(job as Job<DepartmentPreGenJob>);
+    } else if (job.name === 'generate-prequestions-workflow') {
+      return this.handleWorkflowPreGen(job as Job<WorkflowPreGenJob>);
     } else {
       this.logger.error(`Unknown job type: ${job.name}`);
       throw new Error(`Unknown job type: ${job.name}`);
@@ -250,10 +287,20 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         organizationId,
       );
 
-      // Follow-up ORG sessions skip BASE just like scoped sessions, so they
-      // need a bigger initial batch than first-time ORG sessions.
-      const batchOpts =
-        session.scope === ConsultationScope.ORG && ctx.isFollowUp
+      // Pick batch size by scope + state:
+      // - Scoped session that was already seeded with pre-gen starter
+      //   questions (status=IN_PROGRESS at processor start, scope is scoped)
+      //   → smaller top-up batch.
+      // - Scoped session waiting on first batch (status=PENDING_TEMPLATE)
+      //   → full initial batch.
+      // - Follow-up ORG (no BASE) → bigger ORG-specific batch.
+      // - First-time ORG → default 4-5 batch (BASE template covers the rest).
+      const isScopedWithPreGen =
+        session.scope !== ConsultationScope.ORG &&
+        session.status === 'IN_PROGRESS';
+      const batchOpts = isScopedWithPreGen
+        ? PREGEN_TOPUP_BATCH_BY_SCOPE[session.scope]
+        : session.scope === ConsultationScope.ORG && ctx.isFollowUp
           ? FOLLOW_UP_ORG_INITIAL_BATCH
           : INITIAL_BATCH_BY_SCOPE[session.scope];
       const questions =
@@ -373,6 +420,108 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         (error as Error).stack,
       );
       // Don't throw — session continues with existing questions
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Department / Workflow pre-generation (run on entity create)
+  //  These cache 2-3 starter questions on the entity so a later consultation
+  //  can skip the PENDING_TEMPLATE waiting screen.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private async handleDepartmentPreGen(job: Job<DepartmentPreGenJob>) {
+    const { departmentId, organizationId } = job.data;
+    const start = Date.now();
+    this.logger.log(`[dept:${departmentId}] Pre-generating starter questions...`);
+
+    try {
+      const dept = await this.prisma.department.findUnique({
+        where: { id: departmentId },
+        select: { id: true, organizationId: true },
+      });
+      if (!dept || dept.organizationId !== organizationId) {
+        this.logger.log(`[dept:${departmentId}] Not found or org mismatch, skipping`);
+        return;
+      }
+
+      const ctx = await this.sessionService.buildPrePopulationContext(
+        ConsultationScope.DEPARTMENT,
+        organizationId,
+        departmentId,
+      );
+
+      const questions = await this.aiService.generateInitialPersonalizedQuestions(
+        ctx,
+        PREGEN_QUESTION_COUNT,
+      );
+
+      await this.prisma.department.update({
+        where: { id: departmentId },
+        data: {
+          preGeneratedQuestions: questions as any,
+          preGeneratedAt: new Date(),
+        },
+      });
+
+      this.logger.log(
+        `[dept:${departmentId}] Cached ${questions.length} starter questions in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `[dept:${departmentId}] Pre-gen failed: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      // Don't throw — falling back to live generation at session start is fine.
+    }
+  }
+
+  private async handleWorkflowPreGen(job: Job<WorkflowPreGenJob>) {
+    const { workflowId, organizationId } = job.data;
+    const start = Date.now();
+    this.logger.log(`[wf:${workflowId}] Pre-generating starter questions...`);
+
+    try {
+      const wf = await this.prisma.workflow.findUnique({
+        where: { id: workflowId },
+        select: {
+          id: true,
+          departmentId: true,
+          department: { select: { organizationId: true } },
+        },
+      });
+      if (!wf || wf.department.organizationId !== organizationId) {
+        this.logger.log(`[wf:${workflowId}] Not found or org mismatch, skipping`);
+        return;
+      }
+
+      const ctx = await this.sessionService.buildPrePopulationContext(
+        ConsultationScope.WORKFLOW,
+        organizationId,
+        wf.departmentId,
+        workflowId,
+      );
+
+      const questions = await this.aiService.generateInitialPersonalizedQuestions(
+        ctx,
+        PREGEN_QUESTION_COUNT,
+      );
+
+      await this.prisma.workflow.update({
+        where: { id: workflowId },
+        data: {
+          preGeneratedQuestions: questions as any,
+          preGeneratedAt: new Date(),
+        },
+      });
+
+      this.logger.log(
+        `[wf:${workflowId}] Cached ${questions.length} starter questions in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `[wf:${workflowId}] Pre-gen failed: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
     }
   }
 }

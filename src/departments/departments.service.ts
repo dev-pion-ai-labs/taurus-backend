@@ -1,9 +1,12 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
   ConflictException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma';
 import {
   CreateDepartmentDto,
@@ -14,7 +17,26 @@ import {
 
 @Injectable()
 export class DepartmentsService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(DepartmentsService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    @InjectQueue('template-generation') private templateQueue: Queue,
+  ) {}
+
+  /** Fire-and-forget enqueue for pre-gen — never blocks the create response. */
+  private enqueuePreGen(
+    jobName: 'generate-prequestions-dept' | 'generate-prequestions-workflow',
+    data: Record<string, string>,
+  ): void {
+    this.templateQueue
+      .add(jobName, data)
+      .catch((err) =>
+        this.logger.warn(
+          `Failed to enqueue ${jobName} (${JSON.stringify(data)}): ${err.message}`,
+        ),
+      );
+  }
 
   // ── Departments ──────────────────────────────────────────
 
@@ -34,7 +56,7 @@ export class DepartmentsService {
   }
 
   async createDepartment(organizationId: string, dto: CreateDepartmentDto) {
-    return this.prisma.department.create({
+    const department = await this.prisma.department.create({
       data: {
         organizationId,
         name: dto.name,
@@ -44,6 +66,15 @@ export class DepartmentsService {
       },
       include: { workflows: true },
     });
+
+    // Background-cache 2-3 starter questions so a future scoped consultation
+    // skips the AI-generation wait. Failures here never block the create.
+    this.enqueuePreGen('generate-prequestions-dept', {
+      departmentId: department.id,
+      organizationId,
+    });
+
+    return department;
   }
 
   async updateDepartment(
@@ -76,7 +107,7 @@ export class DepartmentsService {
     // Verify department belongs to org
     await this.findDepartmentOrFail(dto.departmentId, organizationId);
 
-    return this.prisma.workflow.create({
+    const workflow = await this.prisma.workflow.create({
       data: {
         departmentId: dto.departmentId,
         name: dto.name,
@@ -88,6 +119,13 @@ export class DepartmentsService {
         priority: (dto.priority as any) || 'MEDIUM',
       },
     });
+
+    this.enqueuePreGen('generate-prequestions-workflow', {
+      workflowId: workflow.id,
+      organizationId,
+    });
+
+    return workflow;
   }
 
   async updateWorkflow(

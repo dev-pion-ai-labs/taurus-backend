@@ -442,14 +442,19 @@ enum WorkflowPriority {
 }
 
 model Department {
-  id             String   @id @default(uuid())
-  organizationId String   @map("organization_id")
-  name           String
-  headcount      Int?
-  avgSalary      Float?   @map("avg_salary")
-  notes          String?  @db.Text
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id                    String    @id @default(uuid())
+  organizationId        String    @map("organization_id")
+  name                  String
+  headcount             Int?
+  avgSalary             Float?    @map("avg_salary")
+  notes                 String?   @db.Text
+  /// Cached starter consultation questions generated when this department was
+  /// created/updated. Used to skip the PENDING wait when a user starts a
+  /// scoped consultation. Shape: Array<{questionText, questionType, options}>.
+  preGeneratedQuestions Json?     @map("pre_generated_questions")
+  preGeneratedAt        DateTime? @map("pre_generated_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
 
   organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   workflows            Workflow[]
@@ -461,17 +466,20 @@ model Department {
 }
 
 model Workflow {
-  id              String          @id @default(uuid())
-  departmentId    String          @map("department_id")
-  name            String
-  description     String?         @db.Text
-  weeklyHours     Float?          @map("weekly_hours")
-  peopleInvolved  Int?            @map("people_involved")
-  automationLevel AutomationLevel @default(NONE) @map("automation_level")
-  painPoints      String?         @map("pain_points") @db.Text
-  priority        WorkflowPriority @default(MEDIUM)
-  createdAt       DateTime        @default(now()) @map("created_at")
-  updatedAt       DateTime        @updatedAt @map("updated_at")
+  id                    String           @id @default(uuid())
+  departmentId          String           @map("department_id")
+  name                  String
+  description           String?          @db.Text
+  weeklyHours           Float?           @map("weekly_hours")
+  peopleInvolved        Int?             @map("people_involved")
+  automationLevel       AutomationLevel  @default(NONE) @map("automation_level")
+  painPoints            String?          @map("pain_points") @db.Text
+  priority              WorkflowPriority @default(MEDIUM)
+  /// Cached starter consultation questions — see Department.preGeneratedQuestions.
+  preGeneratedQuestions Json?            @map("pre_generated_questions")
+  preGeneratedAt        DateTime?        @map("pre_generated_at")
+  createdAt             DateTime         @default(now()) @map("created_at")
+  updatedAt             DateTime         @updatedAt @map("updated_at")
 
   department           Department            @relation(fields: [departmentId], references: [id], onDelete: Cascade)
   consultationSessions ConsultationSession[]
