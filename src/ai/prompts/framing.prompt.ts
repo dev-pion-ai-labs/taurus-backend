@@ -1,3 +1,4 @@
+import { buildReportScopeBanner } from './report-generation.prompt';
 import type { ReportGenerationContext } from './report-generation.prompt';
 
 /**
@@ -19,8 +20,10 @@ export function buildFramingPrompt(ctx: ReportGenerationContext): {
   system: string;
   user: string;
 } {
-  const system = `You are a senior strategist producing the FRAMING for a leadership briefing, not the briefing itself. Your output sets the tone, audience, and core thesis that a downstream briefing call will expand into decision blocks.
+  const scopeBanner = buildReportScopeBanner(ctx.scopeContext);
 
+  const system = `You are a senior strategist producing the FRAMING for a leadership briefing, not the briefing itself. Your output sets the tone, audience, and core thesis that a downstream briefing call will expand into decision blocks.
+${scopeBanner ? `\n${scopeBanner}\n` : ''}
 Return ONLY valid JSON matching the exact schema specified. No markdown, no commentary. Start with { and end with }.
 
 ═══ COMPANY TYPE INFERENCE ═══

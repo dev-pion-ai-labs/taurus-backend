@@ -10,9 +10,15 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { PrismaService } from '../../prisma';
 import { TemplateService } from '../template/template.service';
 import { TemplateGeneratorService } from '../template/template-generator.service';
-import { PaginationQueryDto, PaginatedResponseDto } from '../../common';
-import { QuestionSection, Prisma } from '@prisma/client';
-import type { AdaptiveQuestionContext } from '../../ai/prompts/adaptive-question.prompt';
+import { PaginatedResponseDto } from '../../common';
+import { ConsultationScope, QuestionSection, Prisma } from '@prisma/client';
+import type {
+  AdaptiveQuestionContext,
+  ScopedDepartmentContext,
+  ScopedWorkflowContext,
+} from '../../ai/prompts/adaptive-question.prompt';
+import type { StartSessionDto } from './dto/start-session.dto';
+import type { ListSessionsQueryDto } from './dto/list-sessions-query.dto';
 
 /** How many unanswered questions must remain before we generate more. */
 const BUFFER_THRESHOLD = 3;
@@ -52,11 +58,14 @@ export class SessionService {
   //  Start Session
   // ──────────────────────────────────────────────────────────────────────
 
-  async startSession(userId: string, orgId: string) {
+  async startSession(userId: string, orgId: string, dto: StartSessionDto = {}) {
     const org = await this.prisma.organization.findUnique({
       where: { id: orgId },
     });
     if (!org) throw new NotFoundException('Organization not found');
+
+    const scope = dto.scope ?? ConsultationScope.ORG;
+    await this.validateScopeOwnership(orgId, scope, dto.departmentId, dto.workflowId);
 
     // Always grab the base template for core questions
     const baseTemplate = await this.templateService.getBaseTemplate();
@@ -66,6 +75,9 @@ export class SessionService {
         organizationId: orgId,
         userId,
         status: 'IN_PROGRESS',
+        scope,
+        departmentId: scope === ConsultationScope.ORG ? null : dto.departmentId ?? null,
+        workflowId: scope === ConsultationScope.WORKFLOW ? dto.workflowId ?? null : null,
         baseTemplateId: baseTemplate.id,
         industryTemplateId: null,
       },
@@ -193,6 +205,8 @@ export class SessionService {
           include: { question: true },
         },
         organization: { include: { industry: true } },
+        department: { select: { id: true, name: true } },
+        workflow: { select: { id: true, name: true, departmentId: true } },
       },
     });
 
@@ -212,6 +226,8 @@ export class SessionService {
           include: { question: true },
         },
         organization: { include: { industry: true } },
+        department: { select: { id: true, name: true } },
+        workflow: { select: { id: true, name: true, departmentId: true } },
         report: {
           select: { id: true, status: true },
         },
@@ -467,15 +483,31 @@ export class SessionService {
     // Org + onboarding data doesn't change during a session — cache it
     const orgCtx = await this.getOrgContext(organizationId);
 
-    // Always fetch fresh answers (these change every submission)
-    const answeredQuestions = await this.prisma.sessionQuestion.findMany({
-      where: { sessionId, answeredAt: { not: null } },
-      include: { question: true },
-      orderBy: { orderIndex: 'asc' },
-    });
+    // Fetch session (for scope) + answered questions in parallel.
+    // Scope info is read off the session record — never inferred.
+    const [session, answeredQuestions] = await Promise.all([
+      this.prisma.consultationSession.findUniqueOrThrow({
+        where: { id: sessionId },
+        select: { scope: true, departmentId: true, workflowId: true },
+      }),
+      this.prisma.sessionQuestion.findMany({
+        where: { sessionId, answeredAt: { not: null } },
+        include: { question: true },
+        orderBy: { orderIndex: 'asc' },
+      }),
+    ]);
+
+    const { scopedDepartment, scopedWorkflow } = await this.loadScopedContext(
+      session.scope,
+      session.departmentId,
+      session.workflowId,
+    );
 
     return {
       ...orgCtx,
+      scope: session.scope,
+      scopedDepartment,
+      scopedWorkflow,
       previousQA: answeredQuestions.map((sq) => ({
         question: sq.isAdaptive
           ? sq.adaptiveText!
@@ -487,6 +519,110 @@ export class SessionService {
         section: sq.section,
       })),
     };
+  }
+
+  /**
+   * Loads the real Department/Workflow records for a scoped session. Returns
+   * undefined for both when scope is ORG. Pulls only fields used by the prompt
+   * preamble — no inference, no synthesis.
+   */
+  private async loadScopedContext(
+    scope: ConsultationScope,
+    departmentId: string | null,
+    workflowId: string | null,
+  ): Promise<{
+    scopedDepartment?: ScopedDepartmentContext;
+    scopedWorkflow?: ScopedWorkflowContext;
+  }> {
+    if (scope === ConsultationScope.ORG) return {};
+
+    if (scope === ConsultationScope.DEPARTMENT && departmentId) {
+      const dept = await this.prisma.department.findUnique({
+        where: { id: departmentId },
+        include: { workflows: true },
+      });
+      if (!dept) return {};
+      return {
+        scopedDepartment: {
+          name: dept.name,
+          headcount: dept.headcount,
+          avgSalary: dept.avgSalary,
+          notes: dept.notes,
+          workflows: dept.workflows.map((w) => ({
+            name: w.name,
+            description: w.description,
+            weeklyHours: w.weeklyHours,
+            peopleInvolved: w.peopleInvolved,
+            automationLevel: w.automationLevel,
+            painPoints: w.painPoints,
+            priority: w.priority,
+          })),
+        },
+      };
+    }
+
+    if (scope === ConsultationScope.WORKFLOW && workflowId) {
+      const wf = await this.prisma.workflow.findUnique({
+        where: { id: workflowId },
+        include: { department: true },
+      });
+      if (!wf) return {};
+      return {
+        scopedWorkflow: {
+          name: wf.name,
+          description: wf.description,
+          weeklyHours: wf.weeklyHours,
+          peopleInvolved: wf.peopleInvolved,
+          automationLevel: wf.automationLevel,
+          painPoints: wf.painPoints,
+          priority: wf.priority,
+          department: {
+            name: wf.department.name,
+            headcount: wf.department.headcount,
+          },
+        },
+      };
+    }
+
+    return {};
+  }
+
+  /**
+   * Validates that department/workflow ids belong to the org and that the
+   * workflow (if given) belongs to the given department.
+   */
+  private async validateScopeOwnership(
+    orgId: string,
+    scope: ConsultationScope,
+    departmentId?: string,
+    workflowId?: string,
+  ): Promise<void> {
+    if (scope === ConsultationScope.ORG) return;
+
+    if (!departmentId)
+      throw new BadRequestException('departmentId is required for scoped sessions');
+
+    const dept = await this.prisma.department.findUnique({
+      where: { id: departmentId },
+      select: { id: true, organizationId: true },
+    });
+    if (!dept) throw new NotFoundException('Department not found');
+    if (dept.organizationId !== orgId)
+      throw new ForbiddenException('Department does not belong to your organization');
+
+    if (scope === ConsultationScope.WORKFLOW) {
+      if (!workflowId)
+        throw new BadRequestException('workflowId is required for WORKFLOW scope');
+      const wf = await this.prisma.workflow.findUnique({
+        where: { id: workflowId },
+        select: { id: true, departmentId: true },
+      });
+      if (!wf) throw new NotFoundException('Workflow not found');
+      if (wf.departmentId !== departmentId)
+        throw new BadRequestException(
+          'Workflow does not belong to the given department',
+        );
+    }
   }
 
   private async getOrgContext(organizationId: string): Promise<Omit<AdaptiveQuestionContext, 'previousQA'>> {
@@ -560,10 +696,17 @@ export class SessionService {
   //  List / Abandon
   // ──────────────────────────────────────────────────────────────────────
 
-  async listSessions(orgId: string, query: PaginationQueryDto) {
+  async listSessions(orgId: string, query: ListSessionsQueryDto) {
+    const where: Prisma.ConsultationSessionWhereInput = {
+      organizationId: orgId,
+      ...(query.scope && { scope: query.scope }),
+      ...(query.departmentId && { departmentId: query.departmentId }),
+      ...(query.workflowId && { workflowId: query.workflowId }),
+    };
+
     const [sessions, total] = await Promise.all([
       this.prisma.consultationSession.findMany({
-        where: { organizationId: orgId },
+        where,
         skip: query.skip,
         take: query.limit,
         orderBy: { createdAt: 'desc' },
@@ -571,13 +714,13 @@ export class SessionService {
           user: {
             select: { id: true, email: true, firstName: true, lastName: true },
           },
+          department: { select: { id: true, name: true } },
+          workflow: { select: { id: true, name: true, departmentId: true } },
           report: { select: { id: true, status: true } },
           _count: { select: { questions: true } },
         },
       }),
-      this.prisma.consultationSession.count({
-        where: { organizationId: orgId },
-      }),
+      this.prisma.consultationSession.count({ where }),
     ]);
 
     return new PaginatedResponseDto(sessions, total, query);
