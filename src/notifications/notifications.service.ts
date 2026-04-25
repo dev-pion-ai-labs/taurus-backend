@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
+import { otpTemplate } from './templates/otp.template';
 import { reportReadyTemplate } from './templates/report-ready.template';
 import { sessionReminderTemplate } from './templates/session-reminder.template';
 import { discoverySummaryTemplate } from './templates/discovery-summary.template';
@@ -42,13 +43,8 @@ export class NotificationsService {
   }
 
   async sendOtp(email: string, code: string): Promise<void> {
-    const html = `
-      <h2>Your verification code</h2>
-      <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px;">${code}</p>
-      <p>This code expires in 10 minutes.</p>
-      <p>If you didn't request this, you can safely ignore this email.</p>
-    `;
-    await this.sendEmail(email, 'Your Taurus login code', html);
+    const html = otpTemplate({ code, expiresInMinutes: 10 });
+    await this.sendEmail(email, `Your Taurus sign-in code: ${code}`, html);
   }
 
   async sendReportReady(params: {
