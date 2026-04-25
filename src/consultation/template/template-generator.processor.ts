@@ -14,14 +14,14 @@ import { TemplateService } from './template.service';
 /**
  * Per-scope batch sizes for AI question generation.
  *
- * ORG sessions load BASE template questions first (~6-8 org-wide intro
- * questions) and use the personalized layer to top up with company-specific
- * questions, so the initial batch is small (defaults to 4-5).
+ * First-time ORG sessions load BASE template questions first (~6-8 org-wide
+ * intro questions) and use the personalized layer to top up with company-
+ * specific questions, so the initial batch is small (defaults to 4-5).
  *
- * Scoped sessions (DEPARTMENT / WORKFLOW) skip the BASE template entirely —
- * the personalized batch is the ENTIRE source of questions, so we ask for a
- * larger initial set that fills most of the per-scope cap, leaving only a
- * couple of slots for adaptive follow-ups at the end.
+ * Follow-up ORG sessions and scoped sessions (DEPARTMENT / WORKFLOW) skip the
+ * BASE template entirely — the personalized batch is the ENTIRE source of
+ * questions, so we ask for a larger initial set that fills most of the cap,
+ * leaving a couple of slots for adaptive follow-ups at the end.
  */
 const INITIAL_BATCH_BY_SCOPE: Record<
   ConsultationScope,
@@ -31,6 +31,12 @@ const INITIAL_BATCH_BY_SCOPE: Record<
   DEPARTMENT: { count: '8-10', minExpected: 6 }, // cap 12 → leave ~2 for adaptive
   WORKFLOW: { count: '5-6', minExpected: 4 },    // cap 8  → leave ~2 for adaptive
 };
+
+/**
+ * Override for follow-up ORG sessions (org has completed a prior consultation).
+ * Cap stays 20; this batch fills most of it because BASE is skipped.
+ */
+const FOLLOW_UP_ORG_INITIAL_BATCH = { count: '8-10', minExpected: 6 };
 
 const ADAPTIVE_BATCH_BY_SCOPE: Record<
   ConsultationScope,
@@ -244,7 +250,12 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         organizationId,
       );
 
-      const batchOpts = INITIAL_BATCH_BY_SCOPE[session.scope];
+      // Follow-up ORG sessions skip BASE just like scoped sessions, so they
+      // need a bigger initial batch than first-time ORG sessions.
+      const batchOpts =
+        session.scope === ConsultationScope.ORG && ctx.isFollowUp
+          ? FOLLOW_UP_ORG_INITIAL_BATCH
+          : INITIAL_BATCH_BY_SCOPE[session.scope];
       const questions =
         await this.aiService.generateInitialPersonalizedQuestions(
           ctx,
