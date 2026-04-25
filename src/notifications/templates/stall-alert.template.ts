@@ -1,4 +1,4 @@
-import { wrapEmailTemplate } from './email-base.template';
+import { wrapEmailTemplate, emailStyles } from './email-base.template';
 
 interface StallAlertData {
   userName?: string;
@@ -8,19 +8,25 @@ interface StallAlertData {
 }
 
 export function stallAlertTemplate(data: StallAlertData): string {
-  return wrapEmailTemplate(`
-    <h2>Action Stalled: Needs Attention</h2>
-    <p>${data.userName ? `Hi ${data.userName},` : 'Hi,'}</p>
-    <p>The following transformation action has not been updated in <strong>${data.daysSinceUpdate} days</strong>:</p>
+  const content = `
+    <div style="display: inline-block; padding: 4px 10px; background: #FFF1F2; border: 1px solid #FECACA; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 1px; color: #E11D48; text-transform: uppercase; margin-bottom: 14px;">Needs attention</div>
+    <h2 style="${emailStyles.h2}">An action has stalled</h2>
+    <p style="${emailStyles.p}">${data.userName ? `Hi ${data.userName},` : 'Hi,'}</p>
+    <p style="${emailStyles.p}">A transformation action hasn&rsquo;t moved in <strong style="color: #1C1917;">${data.daysSinceUpdate} days</strong>:</p>
 
-    <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 4px; margin: 16px 0;">
-      <strong>${data.actionTitle}</strong>
+    <div style="${emailStyles.calloutRose}">
+      <div style="font-size: 11px; font-weight: 600; letter-spacing: 1.2px; color: #E11D48; text-transform: uppercase; margin-bottom: 4px;">Stalled action</div>
+      <div style="font-size: 16px; font-weight: 700; color: #1C1917; line-height: 1.4;">${data.actionTitle}</div>
     </div>
 
-    <p>This may indicate a blocker or resource issue. Please review and update the action status, or add a blocker note if there's an impediment.</p>
+    <p style="${emailStyles.p}">This usually means a blocker, a missing owner, or a resource gap. A quick status update or a blocker note keeps the workstream honest.</p>
 
-    <div style="text-align: center;">
-      <a href="${data.trackerUrl}" class="btn">View in Tracker</a>
+    <div style="text-align: center; margin: 28px 0 8px;">
+      <a href="${data.trackerUrl}" class="btn" style="${emailStyles.btnPrimary}">Open in tracker &rarr;</a>
     </div>
-  `);
+  `;
+
+  return wrapEmailTemplate(content, {
+    preheader: `Action stalled ${data.daysSinceUpdate} days: ${data.actionTitle}`,
+  });
 }
