@@ -127,7 +127,11 @@ export interface GeneratedAdaptiveQuestion {
   options: string[] | null;
 }
 
-export function buildInitialQuestionsPrompt(ctx: AdaptiveQuestionContext) {
+export function buildInitialQuestionsPrompt(
+  ctx: AdaptiveQuestionContext,
+  opts: { count?: string } = {},
+) {
+  const count = opts.count ?? '4-5';
   const system = `You are an elite AI transformation consultant conducting a deep-dive consultation. Generate highly personalized consultation questions based on the company's specific profile, website data, and stated challenges.
 
 Output ONLY valid JSON — no markdown, no code fences, no explanation.`;
@@ -145,7 +149,7 @@ Website Intelligence:
   const scopePreamble = buildScopePreamble(ctx);
   const scopeBlock = scopePreamble ? `\n\n${scopePreamble}\n` : '';
 
-  const user = `Generate 4-5 personalized consultation questions for this company.${scopeBlock}
+  const user = `Generate ${count} personalized consultation questions for this company.${scopeBlock}
 
 Company Profile:
 - Name: ${ctx.organization.name}
@@ -180,7 +184,11 @@ Return a JSON array:
   return { system, user };
 }
 
-export function buildAdaptiveFollowUpPrompt(ctx: AdaptiveQuestionContext) {
+export function buildAdaptiveFollowUpPrompt(
+  ctx: AdaptiveQuestionContext,
+  opts: { count?: string } = {},
+) {
+  const count = opts.count ?? '2-3';
   const system = `You are an elite AI transformation consultant conducting a deep-dive consultation. Based on the conversation so far, generate follow-up questions that dig deeper into the most important areas revealed by the user's answers.
 
 Output ONLY valid JSON — no markdown, no code fences, no explanation.`;
@@ -203,7 +211,7 @@ Website Intelligence:
   const scopePreamble = buildScopePreamble(ctx);
   const scopeBlock = scopePreamble ? `\n\n${scopePreamble}\n` : '';
 
-  const user = `Based on this consultation so far, generate 2-3 adaptive follow-up questions.${scopeBlock}
+  const user = `Based on this consultation so far, generate ${count} adaptive follow-up questions.${scopeBlock}
 
 Company: ${ctx.organization.name} (${ctx.organization.industry}, ${ctx.organization.size || 'size unknown'})
 ${scrapedSection}

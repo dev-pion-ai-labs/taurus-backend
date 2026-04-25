@@ -20,12 +20,34 @@ import type {
 import type { StartSessionDto } from './dto/start-session.dto';
 import type { ListSessionsQueryDto } from './dto/list-sessions-query.dto';
 
-/** How many unanswered questions must remain before we generate more. */
-const BUFFER_THRESHOLD = 3;
-/** Hard cap — session never exceeds this many questions. */
-const MAX_QUESTIONS = 20;
+/**
+ * Hard cap per scope — narrower scopes need fewer questions.
+ * Org-level keeps the original 20-question depth; scoped sessions are tighter
+ * because there's less ground to cover and respondents have less patience.
+ */
+const MAX_QUESTIONS_BY_SCOPE: Record<ConsultationScope, number> = {
+  ORG: 20,
+  DEPARTMENT: 12,
+  WORKFLOW: 8,
+};
+
+/** Buffer that triggers more adaptive questions, sized to the scope's cap. */
+const BUFFER_THRESHOLD_BY_SCOPE: Record<ConsultationScope, number> = {
+  ORG: 3,
+  DEPARTMENT: 2,
+  WORKFLOW: 1,
+};
+
 /** How long to cache org context in memory (ms). */
 const CONTEXT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+/** Public so the queue processor can apply the same per-scope buffer. */
+export function getMaxQuestionsForScope(scope: ConsultationScope): number {
+  return MAX_QUESTIONS_BY_SCOPE[scope];
+}
+export function getBufferThresholdForScope(scope: ConsultationScope): number {
+  return BUFFER_THRESHOLD_BY_SCOPE[scope];
+}
 
 interface CachedOrgContext {
   organization: { name: string; industry: string; size: string | null };
@@ -151,25 +173,29 @@ export class SessionService {
     }>,
     section: QuestionSection,
   ) {
-    // Get current max orderIndex
-    const lastQ = await this.prisma.sessionQuestion.findFirst({
-      where: { sessionId },
-      orderBy: { orderIndex: 'desc' },
-      select: { orderIndex: true },
-    });
+    // Fetch scope + last orderIndex + count in parallel
+    const [session, lastQ, currentCount] = await Promise.all([
+      this.prisma.consultationSession.findUniqueOrThrow({
+        where: { id: sessionId },
+        select: { scope: true },
+      }),
+      this.prisma.sessionQuestion.findFirst({
+        where: { sessionId },
+        orderBy: { orderIndex: 'desc' },
+        select: { orderIndex: true },
+      }),
+      this.prisma.sessionQuestion.count({ where: { sessionId } }),
+    ]);
 
     let orderIndex = (lastQ?.orderIndex ?? -1) + 1;
 
-    // Check we don't exceed the cap
-    const currentCount = await this.prisma.sessionQuestion.count({
-      where: { sessionId },
-    });
-    const slotsLeft = MAX_QUESTIONS - currentCount;
+    const max = getMaxQuestionsForScope(session.scope);
+    const slotsLeft = max - currentCount;
     const toAdd = questions.slice(0, slotsLeft);
 
     if (toAdd.length === 0) {
       this.logger.log(
-        `Session ${sessionId} at max questions (${MAX_QUESTIONS}), skipping append`,
+        `Session ${sessionId} at max questions (${max}, scope=${session.scope}), skipping append`,
       );
       return 0;
     }
@@ -371,8 +397,11 @@ export class SessionService {
     const remaining = unanswered.length;
     const nextRaw = unanswered[0] ?? null;
 
-    // Queue adaptive generation when buffer is low but not empty
-    if (remaining > 0 && remaining <= BUFFER_THRESHOLD && totalQuestions < MAX_QUESTIONS) {
+    // Queue adaptive generation when buffer is low but not empty.
+    // Buffer + cap are scope-aware: scoped sessions are shorter overall.
+    const scopeBuffer = getBufferThresholdForScope(session.scope);
+    const scopeMax = getMaxQuestionsForScope(session.scope);
+    if (remaining > 0 && remaining <= scopeBuffer && totalQuestions < scopeMax) {
       this.templateQueue
         .add('generate-adaptive-followup', {
           sessionId,
