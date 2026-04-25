@@ -1,11 +1,38 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
+import { ConsultationScope } from '@prisma/client';
 import { PrismaService } from '../../prisma';
 import { AiService } from '../../ai';
 import { ChallengeService } from '../challenge/challenge.service';
-import { SessionService } from '../session/session.service';
+import {
+  SessionService,
+  getBufferThresholdForScope,
+} from '../session/session.service';
 import { TemplateService } from './template.service';
+
+/**
+ * Per-scope batch sizes for AI question generation. Narrower scopes ask fewer
+ * questions because the surface area is smaller; ORG keeps the original
+ * 4-5 / 2-3 defaults by leaving the entries undefined.
+ */
+const INITIAL_BATCH_BY_SCOPE: Record<
+  ConsultationScope,
+  { count: string; minExpected: number } | undefined
+> = {
+  ORG: undefined,
+  DEPARTMENT: { count: '2-3', minExpected: 2 },
+  WORKFLOW: { count: '1-2', minExpected: 1 },
+};
+
+const ADAPTIVE_BATCH_BY_SCOPE: Record<
+  ConsultationScope,
+  { count: string; minExpected: number } | undefined
+> = {
+  ORG: undefined,
+  DEPARTMENT: { count: '1-2', minExpected: 1 },
+  WORKFLOW: { count: '1', minExpected: 1 },
+};
 
 interface TemplateGenerationJob {
   templateId: string;
@@ -205,8 +232,12 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         organizationId,
       );
 
+      const batchOpts = INITIAL_BATCH_BY_SCOPE[session.scope];
       const questions =
-        await this.aiService.generateInitialPersonalizedQuestions(ctx);
+        await this.aiService.generateInitialPersonalizedQuestions(
+          ctx,
+          batchOpts ?? {},
+        );
 
       const added = await this.sessionService.appendAdaptiveQuestions(
         sessionId,
@@ -215,7 +246,7 @@ export class TemplateGeneratorProcessor extends WorkerHost {
       );
 
       this.logger.log(
-        `[${sessionId}] Personalized batch: ${added} questions added in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+        `[${sessionId}] Personalized batch (scope=${session.scope}, count=${batchOpts?.count ?? '4-5'}): ${added} added in ${((Date.now() - start) / 1000).toFixed(1)}s`,
       );
     } catch (error) {
       this.logger.error(
@@ -247,13 +278,15 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         return;
       }
 
-      // Check if buffer has already been replenished (dedup — another job might have run)
+      // Check if buffer has already been replenished (dedup — another job might have run).
+      // Use the same per-scope buffer the session-side trigger uses.
+      const scopeBuffer = getBufferThresholdForScope(session.scope);
       const remaining = await this.prisma.sessionQuestion.count({
         where: { sessionId, answeredAt: null, skipped: false },
       });
-      if (remaining > 3) {
+      if (remaining > scopeBuffer) {
         this.logger.log(
-          `[${sessionId}] Buffer already sufficient (${remaining} remaining), skipping`,
+          `[${sessionId}] Buffer already sufficient (${remaining} remaining, scope=${session.scope}), skipping`,
         );
         return;
       }
@@ -271,7 +304,11 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         return;
       }
 
-      const questions = await this.aiService.generateAdaptiveFollowUps(ctx);
+      const batchOpts = ADAPTIVE_BATCH_BY_SCOPE[session.scope];
+      const questions = await this.aiService.generateAdaptiveFollowUps(
+        ctx,
+        batchOpts ?? {},
+      );
 
       const added = await this.sessionService.appendAdaptiveQuestions(
         sessionId,
@@ -280,7 +317,7 @@ export class TemplateGeneratorProcessor extends WorkerHost {
       );
 
       this.logger.log(
-        `[${sessionId}] Adaptive follow-up: ${added} questions added in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+        `[${sessionId}] Adaptive follow-up (scope=${session.scope}, count=${batchOpts?.count ?? '2-3'}): ${added} added in ${((Date.now() - start) / 1000).toFixed(1)}s`,
       );
     } catch (error) {
       this.logger.error(

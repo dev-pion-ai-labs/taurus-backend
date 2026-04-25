@@ -307,16 +307,28 @@ Return a JSON object with this exact structure:
 
   async generateInitialPersonalizedQuestions(
     ctx: AdaptiveQuestionContext,
+    opts: { count?: string; minExpected?: number } = {},
   ): Promise<GeneratedAdaptiveQuestion[]> {
-    const { system, user } = buildInitialQuestionsPrompt(ctx);
-    return this.callForQuestions(system, user, 5, 'initial personalized');
+    const { system, user } = buildInitialQuestionsPrompt(ctx, { count: opts.count });
+    return this.callForQuestions(
+      system,
+      user,
+      opts.minExpected ?? 5,
+      'initial personalized',
+    );
   }
 
   async generateAdaptiveFollowUps(
     ctx: AdaptiveQuestionContext,
+    opts: { count?: string; minExpected?: number } = {},
   ): Promise<GeneratedAdaptiveQuestion[]> {
-    const { system, user } = buildAdaptiveFollowUpPrompt(ctx);
-    return this.callForQuestions(system, user, 2, 'adaptive follow-up');
+    const { system, user } = buildAdaptiveFollowUpPrompt(ctx, { count: opts.count });
+    return this.callForQuestions(
+      system,
+      user,
+      opts.minExpected ?? 2,
+      'adaptive follow-up',
+    );
   }
 
   private async callForQuestions(
