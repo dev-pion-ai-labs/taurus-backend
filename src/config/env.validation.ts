@@ -35,6 +35,21 @@ export const envValidationSchema = Joi.object({
   SLACK_CLIENT_ID: Joi.string().optional(),
   SLACK_CLIENT_SECRET: Joi.string().optional(),
 
+  GOOGLE_CLIENT_ID: Joi.string().optional(),
+  GOOGLE_CLIENT_SECRET: Joi.string().optional(),
+
+  NOTION_CLIENT_ID: Joi.string().optional(),
+  NOTION_CLIENT_SECRET: Joi.string().optional(),
+
+  JIRA_CLIENT_ID: Joi.string().optional(),
+  JIRA_CLIENT_SECRET: Joi.string().optional(),
+
+  HUBSPOT_CLIENT_ID: Joi.string().optional(),
+  HUBSPOT_CLIENT_SECRET: Joi.string().optional(),
+
+  SALESFORCE_CLIENT_ID: Joi.string().optional(),
+  SALESFORCE_CLIENT_SECRET: Joi.string().optional(),
+
   GITHUB_APP_ID: Joi.string().optional(),
   GITHUB_PRIVATE_KEY: Joi.string().optional(),
   GITHUB_CLIENT_ID: Joi.string().optional(),
