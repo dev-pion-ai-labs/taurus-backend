@@ -74,8 +74,21 @@ const ADAPTIVE_BATCH_BY_SCOPE: Record<
   { count: string; minExpected: number } | undefined
 > = {
   ORG: undefined,
-  DEPARTMENT: { count: '1-2', minExpected: 1 },
-  WORKFLOW: { count: '1-2', minExpected: 1 },
+  // Scoped sessions get exactly 2 adaptive questions on top of the pregen
+  // set, generated in a single batch near the end of the consultation.
+  DEPARTMENT: { count: '2', minExpected: 2 },
+  WORKFLOW:   { count: '2', minExpected: 2 },
+};
+
+/**
+ * Cap on adaptive questions per session for non-ORG scopes. Once this many
+ * ADAPTIVE-section questions exist, subsequent adaptive triggers no-op
+ * (otherwise the buffer-threshold heuristic could fire multiple times near
+ * the end of a session and append more than intended).
+ */
+const ADAPTIVE_CAP_BY_SCOPE: Partial<Record<ConsultationScope, number>> = {
+  DEPARTMENT: 2,
+  WORKFLOW:   2,
 };
 
 interface TemplateGenerationJob {
@@ -418,6 +431,23 @@ export class TemplateGeneratorProcessor extends WorkerHost {
       if (!session || session.status !== 'IN_PROGRESS') {
         this.logger.log(`[${sessionId}] Session no longer active, skipping`);
         return;
+      }
+
+      // Hard cap on adaptive questions per session (scoped only): if we've
+      // already generated the per-scope budget of ADAPTIVE-section questions,
+      // skip. Buffer-threshold-driven triggers can otherwise fire multiple
+      // times near the end of a session and append more than intended.
+      const adaptiveCap = ADAPTIVE_CAP_BY_SCOPE[session.scope];
+      if (adaptiveCap !== undefined) {
+        const existingAdaptive = await this.prisma.sessionQuestion.count({
+          where: { sessionId, section: 'ADAPTIVE' },
+        });
+        if (existingAdaptive >= adaptiveCap) {
+          this.logger.log(
+            `[${sessionId}] Adaptive cap reached (${existingAdaptive}/${adaptiveCap}, scope=${session.scope}), skipping`,
+          );
+          return;
+        }
       }
 
       // Check if buffer has already been replenished (dedup — another job might have run).
