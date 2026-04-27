@@ -28,8 +28,8 @@ const INITIAL_BATCH_BY_SCOPE: Record<
   { count: string; minExpected: number } | undefined
 > = {
   ORG: undefined,
-  DEPARTMENT: { count: '13-15', minExpected: 10 }, // cap 15 — fills full set when pregen missed
-  WORKFLOW: { count: '11-13', minExpected: 8 },    // cap 13 — fills full set when pregen missed
+  DEPARTMENT: { count: '8-10', minExpected: 6 }, // cap 12 → leave ~2 for adaptive
+  WORKFLOW: { count: '5-6', minExpected: 4 },    // cap 8  → leave ~2 for adaptive
 };
 
 /**
@@ -39,9 +39,9 @@ const INITIAL_BATCH_BY_SCOPE: Record<
 const FOLLOW_UP_ORG_INITIAL_BATCH = { count: '8-10', minExpected: 6 };
 
 /**
- * Top-up batch when scoped sessions already have pre-generated starter
- * questions on the entity record. The pre-gen seeds 3 questions instantly;
- * this batch fills out the consultation while the user answers them.
+ * Smaller batch when scoped sessions already have pre-generated starter
+ * questions on the entity record. The pre-gen makes the start instant; this
+ * top-up generates while the user answers the first 2-3 questions.
  */
 const PREGEN_TOPUP_BATCH_BY_SCOPE: Record<
   ConsultationScope,
@@ -51,14 +51,12 @@ const PREGEN_TOPUP_BATCH_BY_SCOPE: Record<
   // from the cached pregen. Cap is 20; this top-up brings us to ~12-14,
   // leaving a few slots for the adaptive layer at the end.
   ORG: { count: '4-5', minExpected: 3 },
-  // Department: 3 pregen + 10-12 here = 13-15 (hits cap), with 0-2 adaptive room.
-  DEPARTMENT: { count: '10-12', minExpected: 8 },
-  // Workflow: 3 pregen + 8-10 here = 11-13 (hits cap), with 0-2 adaptive room.
-  WORKFLOW: { count: '8-10', minExpected: 6 },
+  DEPARTMENT: { count: '6-7', minExpected: 5 },
+  WORKFLOW: { count: '3-4', minExpected: 2 },
 };
 
 /** Number of starter questions we generate per dept/workflow at create time. */
-const PREGEN_QUESTION_COUNT = { count: '3', minExpected: 3 };
+const PREGEN_QUESTION_COUNT = { count: '2-3', minExpected: 2 };
 
 const ADAPTIVE_BATCH_BY_SCOPE: Record<
   ConsultationScope,
