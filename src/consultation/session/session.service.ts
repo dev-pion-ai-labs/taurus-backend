@@ -8,6 +8,7 @@ import {
 import { Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import { PrismaService } from '../../prisma';
+import { AiService } from '../../ai';
 import { TemplateService } from '../template/template.service';
 import { TemplateGeneratorService } from '../template/template-generator.service';
 import { PaginatedResponseDto } from '../../common';
@@ -21,15 +22,31 @@ import type { StartSessionDto } from './dto/start-session.dto';
 import type { ListSessionsQueryDto } from './dto/list-sessions-query.dto';
 
 /**
- * Hard cap per scope. Mirrors the org flow's depth at smaller scales:
- * pre-cached starters → larger personalized batch → adaptive follow-ups.
- * Department: ~3 pregen + 10–12 personalized + 0–2 adaptive ≈ 13–15.
- * Workflow:   ~3 pregen + 8–10 personalized + 0–2 adaptive ≈ 11–13.
+ * Hard cap per scope — narrower scopes need fewer questions.
+ * Org-level keeps the original 20-question depth; scoped sessions are tighter
+ * because there's less ground to cover and respondents have less patience.
  */
 const MAX_QUESTIONS_BY_SCOPE: Record<ConsultationScope, number> = {
   ORG: 20,
-  DEPARTMENT: 15,
-  WORKFLOW: 13,
+  DEPARTMENT: 12,
+  WORKFLOW: 8,
+};
+
+/**
+ * Minimum total questions a scoped session must reach before it's allowed
+ * to complete. Guards against a race where the user answers all 3 pre-gen
+ * starter questions before the async personalized-batch topup arrives —
+ * without this, `remaining=0` would prematurely mark the session COMPLETED
+ * with only 3 questions. When this floor is hit, submitAnswer force-generates
+ * more questions synchronously before allowing completion.
+ *
+ * Org-scoped sessions don't need this guard: first-time ORG seeds 6-8 BASE
+ * template questions immediately, and ORG follow-up seeds 8-10 from the
+ * cached pregen — neither path can reach `remaining=0` after only 3 answers.
+ */
+const MIN_QUESTIONS_BEFORE_COMPLETE: Partial<Record<ConsultationScope, number>> = {
+  DEPARTMENT: 8,
+  WORKFLOW: 5,
 };
 
 /** Buffer that triggers more adaptive questions, sized to the scope's cap. */
@@ -58,6 +75,32 @@ export function getBufferThresholdForScope(scope: ConsultationScope): number {
   return BUFFER_THRESHOLD_BY_SCOPE[scope];
 }
 
+/**
+ * Shape returned to the frontend for a "next question". Wraps both template
+ * questions (which already have a `.question` relation) and adaptive questions
+ * (which need a synthesized one).
+ */
+function normalizeNextQuestion(
+  raw:
+    | (Prisma.SessionQuestionGetPayload<{ include: { question: true } }> | null),
+) {
+  if (!raw) return null;
+  return {
+    ...raw,
+    question: raw.question ?? {
+      id: raw.id,
+      templateId: null,
+      questionText: raw.adaptiveText,
+      questionType: raw.adaptiveType,
+      options: raw.adaptiveOptions,
+      isRequired: true,
+      orderIndex: raw.orderIndex,
+      metadata: null,
+      createdAt: raw.createdAt,
+    },
+  };
+}
+
 interface CachedOrgContext {
   organization: { name: string; industry: string; size: string | null };
   onboarding: {
@@ -78,6 +121,7 @@ export class SessionService {
 
   constructor(
     private prisma: PrismaService,
+    private aiService: AiService,
     private templateService: TemplateService,
     private templateGeneratorService: TemplateGeneratorService,
     @InjectQueue('analysis') private analysisQueue: Queue,
@@ -617,6 +661,29 @@ export class SessionService {
     }
 
     if (remaining === 0) {
+      // Race-condition guard for scoped sessions: if the user answered all
+      // pre-gen starters before the async personalized-batch topup arrived,
+      // totalQuestions can be as low as 3. Force-generate the missing
+      // questions synchronously rather than completing prematurely.
+      const minBeforeComplete = MIN_QUESTIONS_BEFORE_COMPLETE[session.scope];
+      if (minBeforeComplete && totalQuestions < minBeforeComplete) {
+        const filled = await this.fillScopedSessionBeforeComplete(
+          sessionId,
+          session.organizationId,
+          session.scope,
+          totalQuestions,
+        );
+        if (filled.added > 0 && filled.nextQuestion) {
+          return {
+            status: 'IN_PROGRESS' as const,
+            nextQuestion: filled.nextQuestion,
+            progress: { answered: filled.answered, total: filled.total },
+          };
+        }
+        // Fill produced nothing actionable (AI failure / empty response).
+        // Fall through to completion with what we have — better than blocking.
+      }
+
       const completedSession = await this.prisma.consultationSession.update({
         where: { id: sessionId },
         data: { status: 'COMPLETED', completedAt: new Date() },
@@ -665,6 +732,79 @@ export class SessionService {
       nextQuestion,
       progress: { answered: totalQuestions - remaining, total: totalQuestions },
     };
+  }
+
+  /**
+   * Synchronously generate more questions for a scoped session that ran out
+   * before reaching the per-scope minimum. This happens when the user answers
+   * the 3 pre-gen starter questions faster than the async personalized-batch
+   * topup can arrive — without this guard, `submitAnswer` would mark the
+   * session COMPLETED with only 3 questions.
+   *
+   * Returns the next unanswered question (normalized for the frontend) and
+   * the new totals, or `{ added: 0 }` if the AI couldn't produce more — in
+   * which case the caller falls through to graceful completion.
+   */
+  private async fillScopedSessionBeforeComplete(
+    sessionId: string,
+    organizationId: string,
+    scope: ConsultationScope,
+    currentTotal: number,
+  ): Promise<{
+    added: number;
+    nextQuestion?: ReturnType<typeof normalizeNextQuestion>;
+    answered: number;
+    total: number;
+  }> {
+    this.logger.warn(
+      `[${sessionId}] Scoped session would complete with only ${currentTotal} questions (scope=${scope}); force-generating to avoid premature completion`,
+    );
+    try {
+      const ctx = await this.buildAdaptiveContext(sessionId, organizationId);
+      // Use a smallish synchronous batch — the user is waiting on the submit
+      // call, so we trade some latency for more questions. 4-5 lands the
+      // session well above the floor without making the user wait too long.
+      const questions = await this.aiService.generateInitialPersonalizedQuestions(
+        ctx,
+        { count: '4-5', minExpected: 3 },
+      );
+      const added = await this.appendAdaptiveQuestions(
+        sessionId,
+        questions,
+        'PERSONALIZED',
+      );
+      if (added === 0) {
+        return { added: 0, answered: currentTotal, total: currentTotal };
+      }
+
+      const [nextRaw, total, answered] = await Promise.all([
+        this.prisma.sessionQuestion.findFirst({
+          where: { sessionId, answeredAt: null, skipped: false },
+          orderBy: { orderIndex: 'asc' },
+          include: { question: true },
+        }),
+        this.prisma.sessionQuestion.count({ where: { sessionId } }),
+        this.prisma.sessionQuestion.count({
+          where: { sessionId, answeredAt: { not: null } },
+        }),
+      ]);
+
+      this.logger.log(
+        `[${sessionId}] Force-filled ${added} questions (total now ${total})`,
+      );
+
+      return {
+        added,
+        nextQuestion: normalizeNextQuestion(nextRaw),
+        answered,
+        total,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `[${sessionId}] Force-fill failed; completing with ${currentTotal} questions: ${(err as Error).message}`,
+      );
+      return { added: 0, answered: currentTotal, total: currentTotal };
+    }
   }
 
   private validateAnswer(
