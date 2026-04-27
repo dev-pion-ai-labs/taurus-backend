@@ -47,7 +47,10 @@ const PREGEN_TOPUP_BATCH_BY_SCOPE: Record<
   ConsultationScope,
   { count: string; minExpected: number } | undefined
 > = {
-  ORG: undefined,
+  // ORG follow-up that arrived with 8-10 starter questions already seeded
+  // from the cached pregen. Cap is 20; this top-up brings us to ~12-14,
+  // leaving a few slots for the adaptive layer at the end.
+  ORG: { count: '4-5', minExpected: 3 },
   DEPARTMENT: { count: '6-7', minExpected: 5 },
   WORKFLOW: { count: '3-4', minExpected: 2 },
 };
@@ -89,6 +92,13 @@ interface WorkflowPreGenJob {
   organizationId: string;
 }
 
+interface OrgFollowUpPreGenJob {
+  organizationId: string;
+  /** The session whose completion triggered this pregen — used both to load
+   *  prior answers and as a staleness key when consuming. */
+  sourceSessionId: string;
+}
+
 @Processor('template-generation', { concurrency: 3 })
 export class TemplateGeneratorProcessor extends WorkerHost {
   private readonly logger = new Logger(TemplateGeneratorProcessor.name);
@@ -110,6 +120,7 @@ export class TemplateGeneratorProcessor extends WorkerHost {
       | AdaptiveFollowUpJob
       | DepartmentPreGenJob
       | WorkflowPreGenJob
+      | OrgFollowUpPreGenJob
     >,
   ) {
     if (job.name === 'generate-template') {
@@ -122,6 +133,8 @@ export class TemplateGeneratorProcessor extends WorkerHost {
       return this.handleDepartmentPreGen(job as Job<DepartmentPreGenJob>);
     } else if (job.name === 'generate-prequestions-workflow') {
       return this.handleWorkflowPreGen(job as Job<WorkflowPreGenJob>);
+    } else if (job.name === 'generate-prequestions-org-followup') {
+      return this.handleOrgFollowUpPreGen(job as Job<OrgFollowUpPreGenJob>);
     } else {
       this.logger.error(`Unknown job type: ${job.name}`);
       throw new Error(`Unknown job type: ${job.name}`);
@@ -291,14 +304,19 @@ export class TemplateGeneratorProcessor extends WorkerHost {
       // - Scoped session that was already seeded with pre-gen starter
       //   questions (status=IN_PROGRESS at processor start, scope is scoped)
       //   → smaller top-up batch.
+      // - ORG follow-up that was seeded with pre-gen starter questions
+      //   (status=IN_PROGRESS, ctx.isFollowUp=true) → smaller top-up batch.
+      //   First-time ORG also has IN_PROGRESS at this point but isFollowUp
+      //   is false, so it correctly falls through to the default 4-5 batch.
       // - Scoped session waiting on first batch (status=PENDING_TEMPLATE)
       //   → full initial batch.
-      // - Follow-up ORG (no BASE) → bigger ORG-specific batch.
+      // - Follow-up ORG without seed (status=PENDING_TEMPLATE) → bigger
+      //   ORG-specific initial batch.
       // - First-time ORG → default 4-5 batch (BASE template covers the rest).
-      const isScopedWithPreGen =
-        session.scope !== ConsultationScope.ORG &&
-        session.status === 'IN_PROGRESS';
-      const batchOpts = isScopedWithPreGen
+      const isPreGenSeeded =
+        session.status === 'IN_PROGRESS' &&
+        (session.scope !== ConsultationScope.ORG || ctx.isFollowUp === true);
+      const batchOpts = isPreGenSeeded
         ? PREGEN_TOPUP_BATCH_BY_SCOPE[session.scope]
         : session.scope === ConsultationScope.ORG && ctx.isFollowUp
           ? FOLLOW_UP_ORG_INITIAL_BATCH
@@ -522,6 +540,54 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         `[wf:${workflowId}] Pre-gen failed: ${(error as Error).message}`,
         (error as Error).stack,
       );
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Org Follow-Up Pre-Gen: chained off the analysis processor AFTER the
+  //  prior session's report has been generated. Caches starter questions on
+  //  the Organization row so the user's NEXT org consultation skips the
+  //  live-generation wait.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private async handleOrgFollowUpPreGen(job: Job<OrgFollowUpPreGenJob>) {
+    const { organizationId, sourceSessionId } = job.data;
+    const start = Date.now();
+    this.logger.log(
+      `[org:${organizationId}] Pre-generating starter questions (source session ${sourceSessionId})...`,
+    );
+
+    try {
+      const ctx = await this.sessionService.buildOrgFollowUpPreGenContext(
+        organizationId,
+        sourceSessionId,
+      );
+
+      const questions = await this.aiService.generateInitialPersonalizedQuestions(
+        ctx,
+        FOLLOW_UP_ORG_INITIAL_BATCH,
+      );
+
+      await this.prisma.organization.update({
+        where: { id: organizationId },
+        data: {
+          preGeneratedQuestions: {
+            generatedFor: sourceSessionId,
+            questions,
+          } as any,
+          preGeneratedAt: new Date(),
+        },
+      });
+
+      this.logger.log(
+        `[org:${organizationId}] Cached ${questions.length} starter questions in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `[org:${organizationId}] Org follow-up pre-gen failed: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      // Don't throw — falling back to live generation at session start is fine.
     }
   }
 }

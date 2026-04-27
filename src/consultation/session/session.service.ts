@@ -41,6 +41,14 @@ const BUFFER_THRESHOLD_BY_SCOPE: Record<ConsultationScope, number> = {
 /** How long to cache org context in memory (ms). */
 const CONTEXT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
+/**
+ * Maximum age of cached org-followup starter questions before we treat them as
+ * stale and fall back to live generation. Long enough to cover the typical
+ * gap between consultations; short enough that a 6-month-old cache built
+ * against an org's outdated profile won't be used.
+ */
+const ORG_PREGEN_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+
 /** Public so the queue processor can apply the same per-scope buffer. */
 export function getMaxQuestionsForScope(scope: ConsultationScope): number {
   return MAX_QUESTIONS_BY_SCOPE[scope];
@@ -142,14 +150,16 @@ export class SessionService {
       coreCount = coreQuestions.length;
     }
 
-    // For scoped sessions, check if pre-gen starter questions are cached on
-    // the entity record. If so, insert them as the first session questions
-    // and skip the PENDING wait — the user lands directly on Q1.
+    // For scoped sessions AND for follow-up ORG sessions, check if pre-gen
+    // starter questions are cached on the entity record. If so, insert them
+    // as the first session questions and skip the PENDING wait — the user
+    // lands directly on Q1.
     let preGenCount = 0;
-    if (isScoped) {
+    if (isScoped || isFollowUpOrg) {
       preGenCount = await this.consumePreGeneratedQuestions(
         session.id,
         scope,
+        orgId,
         dto.departmentId,
         dto.workflowId,
       );
@@ -180,13 +190,26 @@ export class SessionService {
   }
 
   /**
-   * Reads cached starter questions off the scoped Department or Workflow
-   * record (set by the pre-gen queue job at entity create time) and inserts
-   * them as SessionQuestion rows. Returns the count inserted (0 if none).
+   * Reads cached starter questions off the relevant entity record and inserts
+   * them as SessionQuestion rows. Returns the count inserted (0 if none /
+   * stale / missing).
+   *
+   * Sources by scope:
+   *  - DEPARTMENT → Department.preGeneratedQuestions (set when the dept was created)
+   *  - WORKFLOW   → Workflow.preGeneratedQuestions (set when the workflow was created)
+   *  - ORG (follow-up only) → Organization.preGeneratedQuestions (set after the
+   *     prior session's report finished generating)
+   *
+   * For ORG, the cache is wrapped in an envelope `{ generatedFor, questions }`
+   * so we can verify it was generated against the most recent completed
+   * session. Stale caches (older than ORG_PREGEN_MAX_AGE_MS, or generated
+   * against an older session) are skipped — live generation kicks in instead.
+   * Successfully consumed ORG caches are cleared so they aren't double-used.
    */
   private async consumePreGeneratedQuestions(
     sessionId: string,
     scope: ConsultationScope,
+    organizationId: string,
     departmentId?: string,
     workflowId?: string,
   ): Promise<number> {
@@ -196,23 +219,27 @@ export class SessionService {
       options: string[] | null;
     };
 
-    let raw: unknown = null;
+    let questions: PreGenQuestion[] = [];
+
     if (scope === ConsultationScope.DEPARTMENT && departmentId) {
       const dept = await this.prisma.department.findUnique({
         where: { id: departmentId },
         select: { preGeneratedQuestions: true },
       });
-      raw = dept?.preGeneratedQuestions ?? null;
+      const raw = dept?.preGeneratedQuestions;
+      if (Array.isArray(raw)) questions = raw as unknown as PreGenQuestion[];
     } else if (scope === ConsultationScope.WORKFLOW && workflowId) {
       const wf = await this.prisma.workflow.findUnique({
         where: { id: workflowId },
         select: { preGeneratedQuestions: true },
       });
-      raw = wf?.preGeneratedQuestions ?? null;
+      const raw = wf?.preGeneratedQuestions;
+      if (Array.isArray(raw)) questions = raw as unknown as PreGenQuestion[];
+    } else if (scope === ConsultationScope.ORG) {
+      questions = await this.consumeOrgPreGenIfFresh(organizationId, sessionId);
     }
 
-    if (!Array.isArray(raw) || raw.length === 0) return 0;
-    const questions = raw as PreGenQuestion[];
+    if (questions.length === 0) return 0;
 
     await this.prisma.sessionQuestion.createMany({
       data: questions.map((q, i) => ({
@@ -227,6 +254,83 @@ export class SessionService {
     });
 
     return questions.length;
+  }
+
+  /**
+   * Returns ORG starter questions if the cache is fresh AND generated against
+   * the most recent completed ORG session. Clears the cache on the way out so
+   * a single pre-gen is never consumed twice.
+   */
+  private async consumeOrgPreGenIfFresh(
+    organizationId: string,
+    currentSessionId: string,
+  ): Promise<
+    Array<{ questionText: string; questionType: string; options: string[] | null }>
+  > {
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { preGeneratedQuestions: true, preGeneratedAt: true },
+    });
+
+    const envelope = org?.preGeneratedQuestions as
+      | { generatedFor?: string; questions?: unknown }
+      | null
+      | undefined;
+    const generatedAt = org?.preGeneratedAt;
+
+    if (!envelope || !Array.isArray(envelope.questions) || !generatedAt) {
+      return [];
+    }
+
+    // Stale by age?
+    if (Date.now() - generatedAt.getTime() > ORG_PREGEN_MAX_AGE_MS) {
+      this.logger.log(
+        `[org:${organizationId}] Pre-gen cache stale (age > ${ORG_PREGEN_MAX_AGE_MS}ms), skipping`,
+      );
+      // Clear the stale cache so it doesn't sit around — saves the next
+      // consume from re-checking.
+      await this.prisma.organization.update({
+        where: { id: organizationId },
+        data: { preGeneratedQuestions: Prisma.JsonNull, preGeneratedAt: null },
+      });
+      return [];
+    }
+
+    // Stale by source: was this cache generated against the actual most
+    // recent completed session? If a newer completed session exists, the
+    // cache was built on outdated context — skip it.
+    const latestCompleted = await this.prisma.consultationSession.findFirst({
+      where: {
+        organizationId,
+        scope: ConsultationScope.ORG,
+        status: 'COMPLETED',
+        id: { not: currentSessionId },
+      },
+      orderBy: { completedAt: 'desc' },
+      select: { id: true },
+    });
+    if (latestCompleted && latestCompleted.id !== envelope.generatedFor) {
+      this.logger.log(
+        `[org:${organizationId}] Pre-gen cache out of date (generatedFor=${envelope.generatedFor} vs latest=${latestCompleted.id}), skipping`,
+      );
+      await this.prisma.organization.update({
+        where: { id: organizationId },
+        data: { preGeneratedQuestions: Prisma.JsonNull, preGeneratedAt: null },
+      });
+      return [];
+    }
+
+    // Fresh — clear the cache so it can't be re-consumed by a sibling start.
+    await this.prisma.organization.update({
+      where: { id: organizationId },
+      data: { preGeneratedQuestions: Prisma.JsonNull, preGeneratedAt: null },
+    });
+
+    return envelope.questions as Array<{
+      questionText: string;
+      questionType: string;
+      options: string[] | null;
+    }>;
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -737,6 +841,59 @@ export class SessionService {
       scope,
       scopedDepartment,
       scopedWorkflow,
+      previousQA: [],
+    };
+  }
+
+  /**
+   * Build an AdaptiveQuestionContext for pre-generating starter questions for
+   * the NEXT org-level follow-up consultation. Called by the queue processor
+   * AFTER the source session's report has been generated. Pulls answers from
+   * the specific source session rather than "most recent completed" so the
+   * cache is unambiguously tied to a single completion.
+   */
+  async buildOrgFollowUpPreGenContext(
+    organizationId: string,
+    sourceSessionId: string,
+  ): Promise<AdaptiveQuestionContext> {
+    const orgCtx = await this.getOrgContext(organizationId);
+
+    const source = await this.prisma.consultationSession.findUnique({
+      where: { id: sourceSessionId },
+      select: { completedAt: true, organizationId: true, scope: true },
+    });
+    if (
+      !source ||
+      source.organizationId !== organizationId ||
+      source.scope !== ConsultationScope.ORG
+    ) {
+      throw new Error(
+        `Source session ${sourceSessionId} missing or not an ORG session for org ${organizationId}`,
+      );
+    }
+
+    const answers = await this.prisma.sessionQuestion.findMany({
+      where: { sessionId: sourceSessionId, answeredAt: { not: null } },
+      include: { question: true },
+      orderBy: { orderIndex: 'asc' },
+      take: 20,
+    });
+
+    const completedAt = source.completedAt
+      ? source.completedAt.toISOString()
+      : '';
+
+    return {
+      ...orgCtx,
+      scope: ConsultationScope.ORG,
+      isFollowUp: true,
+      priorOrgAnswers: answers.map((sq) => ({
+        question: sq.isAdaptive
+          ? sq.adaptiveText!
+          : sq.question!.questionText,
+        answer: (sq.answer as any)?.value ?? sq.answer,
+        completedAt,
+      })),
       previousQA: [],
     };
   }

@@ -166,6 +166,13 @@ model Organization {
   name       String
   industryId String   @map("industry_id")
   size       String?
+  /// Cached starter consultation questions for the NEXT org follow-up
+  /// consultation. Populated by a background job chained after the prior
+  /// session's report finishes generating, so the user's next consultation
+  /// skips the live-generation wait. Shape:
+  /// { generatedFor: <sourceSessionId>, questions: Array<{questionText, questionType, options}> }.
+  preGeneratedQuestions Json?     @map("pre_generated_questions")
+  preGeneratedAt        DateTime? @map("pre_generated_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 

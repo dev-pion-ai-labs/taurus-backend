@@ -1,6 +1,6 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Processor, WorkerHost, InjectQueue } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
-import { Job } from 'bullmq';
+import { Job, Queue } from 'bullmq';
 import { PrismaService } from '../prisma';
 import { AiService } from '../ai';
 import { WebsiteScraperService } from '../onboarding/website-scraper.service';
@@ -38,6 +38,7 @@ export class AnalysisProcessor extends WorkerHost {
     private notifications: NotificationsService,
     private slack: SlackService,
     private tracker: TrackerService,
+    @InjectQueue('template-generation') private templateQueue: Queue,
   ) {
     super();
   }
@@ -141,12 +142,19 @@ export class AnalysisProcessor extends WorkerHost {
           );
         }
 
+        // Load session once for both the notification and the pregen-chain
+        // step below — saves a round trip vs. fetching twice.
+        const session = await this.prisma.consultationSession.findUnique({
+          where: { id: sessionId },
+          select: {
+            scope: true,
+            user: { select: { email: true, firstName: true } },
+            organization: { select: { name: true } },
+          },
+        });
+
         // Send "report ready" notification
         try {
-          const session = await this.prisma.consultationSession.findUnique({
-            where: { id: sessionId },
-            include: { user: true, organization: true },
-          });
           if (session?.user?.email) {
             await this.notifications.sendReportReady({
               email: session.user.email,
@@ -174,6 +182,22 @@ export class AnalysisProcessor extends WorkerHost {
             valueMidpoint,
           )
           .catch(() => {});
+
+        // Pre-cache starter questions for the NEXT org follow-up consultation.
+        // Chained AFTER report generation so the two Claude calls don't
+        // compete; pregen is invisible to the user, the report is not.
+        if (session?.scope === 'ORG') {
+          try {
+            await this.templateQueue.add('generate-prequestions-org-followup', {
+              organizationId,
+              sourceSessionId: sessionId,
+            });
+          } catch (err) {
+            this.logger.warn(
+              `[${reportId}] Failed to enqueue org-followup pregen: ${(err as Error).message}`,
+            );
+          }
+        }
       } catch (error) {
         this.logger.error(
           `[${reportId}] Report generation failed after ${((Date.now() - start) / 1000).toFixed(1)}s: ${(error as Error).message}`,
