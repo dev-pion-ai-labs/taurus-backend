@@ -21,14 +21,15 @@ import type { StartSessionDto } from './dto/start-session.dto';
 import type { ListSessionsQueryDto } from './dto/list-sessions-query.dto';
 
 /**
- * Hard cap per scope — narrower scopes need fewer questions.
- * Org-level keeps the original 20-question depth; scoped sessions are tighter
- * because there's less ground to cover and respondents have less patience.
+ * Hard cap per scope. Mirrors the org flow's depth at smaller scales:
+ * pre-cached starters → larger personalized batch → adaptive follow-ups.
+ * Department: ~3 pregen + 10–12 personalized + 0–2 adaptive ≈ 13–15.
+ * Workflow:   ~3 pregen + 8–10 personalized + 0–2 adaptive ≈ 11–13.
  */
 const MAX_QUESTIONS_BY_SCOPE: Record<ConsultationScope, number> = {
   ORG: 20,
-  DEPARTMENT: 12,
-  WORKFLOW: 8,
+  DEPARTMENT: 15,
+  WORKFLOW: 13,
 };
 
 /** Buffer that triggers more adaptive questions, sized to the scope's cap. */
