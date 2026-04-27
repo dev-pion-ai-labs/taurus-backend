@@ -663,25 +663,49 @@ export class SessionService {
     if (remaining === 0) {
       // Race-condition guard for scoped sessions: if the user answered all
       // pre-gen starters before the async personalized-batch topup arrived,
-      // totalQuestions can be as low as 3. Force-generate the missing
-      // questions synchronously rather than completing prematurely.
+      // totalQuestions can be as low as 3. Try a synchronous fill first.
       const minBeforeComplete = MIN_QUESTIONS_BEFORE_COMPLETE[session.scope];
       if (minBeforeComplete && totalQuestions < minBeforeComplete) {
-        const filled = await this.fillScopedSessionBeforeComplete(
+        await this.fillScopedSessionBeforeComplete(
           sessionId,
           session.organizationId,
           session.scope,
           totalQuestions,
+        ).catch((err) =>
+          this.logger.warn(
+            `[${sessionId}] fillScopedSessionBeforeComplete threw: ${(err as Error).message}`,
+          ),
         );
-        if (filled.added > 0 && filled.nextQuestion) {
-          return {
-            status: 'IN_PROGRESS' as const,
-            nextQuestion: filled.nextQuestion,
-            progress: { answered: filled.answered, total: filled.total },
-          };
-        }
-        // Fill produced nothing actionable (AI failure / empty response).
-        // Fall through to completion with what we have — better than blocking.
+      }
+
+      // BULLETPROOF FINAL RECHECK: by the time we get here, any of these
+      // could have written new questions to the DB:
+      //   - the async personalized-batch topup (BullMQ worker)
+      //   - the adaptive-followup we may have queued earlier in this call
+      //   - the synchronous fill above
+      // If ANY unanswered question exists right now, return it instead of
+      // completing. This guard makes premature completion impossible
+      // regardless of which background job happened to win the race.
+      const freshNext = await this.prisma.sessionQuestion.findFirst({
+        where: { sessionId, answeredAt: null, skipped: false },
+        orderBy: { orderIndex: 'asc' },
+        include: { question: true },
+      });
+      if (freshNext) {
+        const [freshTotal, freshAnswered] = await Promise.all([
+          this.prisma.sessionQuestion.count({ where: { sessionId } }),
+          this.prisma.sessionQuestion.count({
+            where: { sessionId, answeredAt: { not: null } },
+          }),
+        ]);
+        this.logger.log(
+          `[${sessionId}] Recheck found unanswered Q${freshNext.orderIndex + 1} (total=${freshTotal}, answered=${freshAnswered}); returning instead of completing`,
+        );
+        return {
+          status: 'IN_PROGRESS' as const,
+          nextQuestion: normalizeNextQuestion(freshNext),
+          progress: { answered: freshAnswered, total: freshTotal },
+        };
       }
 
       const completedSession = await this.prisma.consultationSession.update({

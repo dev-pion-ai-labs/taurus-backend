@@ -55,8 +55,19 @@ const PREGEN_TOPUP_BATCH_BY_SCOPE: Record<
   WORKFLOW: { count: '3-4', minExpected: 2 },
 };
 
-/** Number of starter questions we generate per dept/workflow at create time. */
-const PREGEN_QUESTION_COUNT = { count: '2-3', minExpected: 2 };
+/**
+ * Number of starter questions we generate per dept/workflow at create time.
+ * We pre-generate the FULL per-scope set up-front so the user lands on Q1
+ * instantly AND the consultation never relies on the async topup batch
+ * arriving in time. Eliminates the race that caused premature completion
+ * when users answered the starters faster than topup could land.
+ */
+const PREGEN_QUESTION_COUNT_BY_SCOPE: Partial<
+  Record<ConsultationScope, { count: string; minExpected: number }>
+> = {
+  DEPARTMENT: { count: '8-10', minExpected: 7 },
+  WORKFLOW:   { count: '5-6',  minExpected: 4 },
+};
 
 const ADAPTIVE_BATCH_BY_SCOPE: Record<
   ConsultationScope,
@@ -295,6 +306,24 @@ export class TemplateGeneratorProcessor extends WorkerHost {
         return;
       }
 
+      // Scoped sessions now pre-generate the FULL set of questions at
+      // entity-create time. If the session is already adequately filled
+      // from that pregen, this topup job is a no-op — avoids racing the
+      // user and producing duplicate / late questions.
+      if (session.scope !== ConsultationScope.ORG) {
+        const existingCount = await this.prisma.sessionQuestion.count({
+          where: { sessionId },
+        });
+        const initialMin =
+          INITIAL_BATCH_BY_SCOPE[session.scope]?.minExpected ?? 0;
+        if (existingCount >= initialMin) {
+          this.logger.log(
+            `[${sessionId}] Already filled from pregen (${existingCount} >= ${initialMin}), skipping topup`,
+          );
+          return;
+        }
+      }
+
       const ctx = await this.sessionService.buildAdaptiveContext(
         sessionId,
         organizationId,
@@ -470,7 +499,7 @@ export class TemplateGeneratorProcessor extends WorkerHost {
 
       const questions = await this.aiService.generateInitialPersonalizedQuestions(
         ctx,
-        PREGEN_QUESTION_COUNT,
+        PREGEN_QUESTION_COUNT_BY_SCOPE.DEPARTMENT ?? {},
       );
 
       await this.prisma.department.update({
@@ -521,7 +550,7 @@ export class TemplateGeneratorProcessor extends WorkerHost {
 
       const questions = await this.aiService.generateInitialPersonalizedQuestions(
         ctx,
-        PREGEN_QUESTION_COUNT,
+        PREGEN_QUESTION_COUNT_BY_SCOPE.WORKFLOW ?? {},
       );
 
       await this.prisma.workflow.update({
