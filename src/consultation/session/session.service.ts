@@ -49,11 +49,19 @@ const MIN_QUESTIONS_BEFORE_COMPLETE: Partial<Record<ConsultationScope, number>> 
   WORKFLOW: 5,
 };
 
-/** Buffer that triggers more adaptive questions, sized to the scope's cap. */
+/**
+ * Buffer that triggers adaptive question generation. Sized so the user has
+ * MORE than the typical 6-15s Claude API latency worth of unanswered questions
+ * left when adaptive fires — otherwise the user can finish before adaptive
+ * lands and the consultation completes without the adaptive layer.
+ *
+ * Rule of thumb: buffer >= ~3 unanswered (≈15s of answering at ~5s/question)
+ * gives adaptive its full 6-15s runway with margin.
+ */
 const BUFFER_THRESHOLD_BY_SCOPE: Record<ConsultationScope, number> = {
   ORG: 3,
-  DEPARTMENT: 2,
-  WORKFLOW: 1,
+  DEPARTMENT: 4,
+  WORKFLOW: 3,
 };
 
 /** How long to cache org context in memory (ms). */
