@@ -22,7 +22,22 @@ export interface ScopedWorkflowContext {
   automationLevel: string;
   painPoints: string | null;
   priority: string;
-  department: { name: string; headcount: number | null };
+  department: {
+    name: string;
+    headcount: number | null;
+    /** Free-text notes captured when the dept was created — surfaces as
+     *  contextual grounding for workflow-scoped questions. */
+    notes: string | null;
+  };
+  /** Up to 3 sibling workflows in the same department. Used to drive
+   *  comparative questions ("how does this differ from peer workflows?"). */
+  siblingWorkflows?: Array<{
+    name: string;
+    automationLevel: string;
+    weeklyHours: number | null;
+    painPoints: string | null;
+    priority: string;
+  }>;
 }
 
 export interface AdaptiveQuestionContext {
@@ -50,6 +65,13 @@ export interface AdaptiveQuestionContext {
   scope?: 'ORG' | 'DEPARTMENT' | 'WORKFLOW';
   scopedDepartment?: ScopedDepartmentContext;
   scopedWorkflow?: ScopedWorkflowContext;
+  /** Other departments in the same org. Surfaced for DEPARTMENT-scope
+   *  pregen so questions can frame this dept relative to peers (size,
+   *  presence). Cap ~5 names. */
+  siblingDepartments?: Array<{
+    name: string;
+    headcount: number | null;
+  }>;
   /**
    * True when this is NOT the org's first consultation (an earlier ORG-level
    * session has been completed). Drives a different prompt that avoids
@@ -139,8 +161,19 @@ export function buildScopePreamble(ctx: AdaptiveQuestionContext): string {
     } else {
       lines.push(`(no workflows mapped for this department)`);
     }
+    if (ctx.siblingDepartments && ctx.siblingDepartments.length) {
+      const peers = ctx.siblingDepartments
+        .slice(0, 5)
+        .map(
+          (s) =>
+            `${s.name}${s.headcount != null ? ` (${s.headcount})` : ''}`,
+        )
+        .join(', ');
+      lines.push(`Peer departments in this org: ${peers}`);
+    }
     lines.push(
       `Constraint: every question must apply to this department's people, workflows, or processes. Do NOT ask company-wide questions.`,
+      `Comparative angle: where it sharpens the question, frame against this dept's own workflows or peer departments listed above. Avoid generic "how do you measure efficiency" questions.`,
     );
     return lines.join('\n');
   }
@@ -154,19 +187,66 @@ export function buildScopePreamble(ctx: AdaptiveQuestionContext): string {
       `- Name: ${w.name}`,
       `- Department: ${w.department.name}${w.department.headcount != null ? ` (${w.department.headcount} ppl)` : ''}`,
     ];
+    if (w.department.notes) {
+      lines.push(`- Department notes: ${w.department.notes}`);
+    }
     if (w.description) lines.push(`- Description: ${w.description}`);
     if (w.weeklyHours != null) lines.push(`- Weekly hours: ${w.weeklyHours}`);
     if (w.peopleInvolved != null) lines.push(`- People involved: ${w.peopleInvolved}`);
     lines.push(`- Current automation level: ${w.automationLevel}`);
     lines.push(`- Priority: ${w.priority}`);
     if (w.painPoints) lines.push(`- Pain points: ${w.painPoints}`);
+    if (w.siblingWorkflows && w.siblingWorkflows.length) {
+      lines.push(`Peer workflows in the same department:`);
+      for (const s of w.siblingWorkflows.slice(0, 3)) {
+        const parts: string[] = [`  - ${s.name}`];
+        if (s.weeklyHours != null) parts.push(`${s.weeklyHours}h/wk`);
+        parts.push(`automation: ${s.automationLevel}`);
+        parts.push(`priority: ${s.priority}`);
+        if (s.painPoints) parts.push(`pain: ${s.painPoints}`);
+        lines.push(parts.join(' | '));
+      }
+    }
     lines.push(
       `Constraint: every question must apply to this single workflow. Do NOT ask department-wide or company-wide questions.`,
+      `Comparative angle: where useful, reference how this workflow differs from the peer workflows listed above (automation gap, hours, pain). Avoid generic "do you use any tools" questions.`,
     );
     return lines.join('\n');
   }
 
   return '';
+}
+
+/**
+ * For DEPARTMENT and WORKFLOW pregen: when the org has a recently completed
+ * ORG-level consultation, surface a short "themes already covered" block so
+ * scope-level questions don't redundantly re-ask company-wide ground.
+ * Returns empty string for ORG scope (handled by buildFollowUpPreamble) or
+ * when no prior answers are available.
+ */
+export function buildScopedPriorThemesBlock(
+  ctx: AdaptiveQuestionContext,
+): string {
+  if (!ctx.scope || ctx.scope === 'ORG') return '';
+  if (!ctx.priorOrgAnswers || ctx.priorOrgAnswers.length === 0) return '';
+
+  const themes = ctx.priorOrgAnswers
+    .slice(0, 6)
+    .map((qa) => {
+      const ans =
+        typeof qa.answer === 'object'
+          ? JSON.stringify(qa.answer)
+          : String(qa.answer);
+      const trimmedAns = ans.length > 100 ? ans.slice(0, 100) + '…' : ans;
+      return `  - ${qa.question} → ${trimmedAns}`;
+    })
+    .join('\n');
+
+  return `\n═══ ORG-LEVEL CONTEXT (prior consultation) ═══
+The org has answered these questions in a recent ORG-wide consultation. Use them as background; do NOT re-ask the same ground at this scope:
+${themes}
+═════════════════════════════════════════════
+`;
 }
 
 export interface GeneratedAdaptiveQuestion {
@@ -197,8 +277,40 @@ Website Intelligence:
   const scopePreamble = buildScopePreamble(ctx);
   const scopeBlock = scopePreamble ? `\n\n${scopePreamble}\n` : '';
   const followUpBlock = buildFollowUpPreamble(ctx);
+  const scopedPriorBlock = buildScopedPriorThemesBlock(ctx);
 
-  const user = `Generate ${count} personalized consultation questions for this company.${scopeBlock}${followUpBlock}
+  // Scope-tuned question type mix and few-shot examples — workflows reward
+  // tactical TEXT (process detail) + SCALE (rate friction); departments
+  // reward strategic CHOICE/SCALE; org keeps the original balanced mix.
+  let typeMixLine: string;
+  let fewShotBlock: string;
+  if (ctx.scope === 'WORKFLOW') {
+    typeMixLine =
+      '- Mix question types for THIS scope: TEXT (~50%, process specifics), SCALE (~25%, rate friction/maturity), SINGLE_CHOICE/MULTI_CHOICE (~25%, structured choices)';
+    fewShotBlock = `
+
+Examples (illustrative — do NOT copy verbatim, adapt to the actual workflow facts above):
+  GOOD: "Your ${ctx.scopedWorkflow?.name ?? 'reporting'} workflow runs at ${ctx.scopedWorkflow?.automationLevel ?? 'NONE'} automation while a peer in the same dept runs higher — what's the single biggest blocker to lifting it?"
+  GOOD: "On a 1-5 scale, how much of the ${ctx.scopedWorkflow?.weeklyHours ?? 'weekly'}h spent on this workflow is rework or chasing inputs?"
+  AVOID (too generic): "Do you use any tools?"
+  AVOID (out of scope): "How does your company measure overall AI maturity?"`;
+  } else if (ctx.scope === 'DEPARTMENT') {
+    typeMixLine =
+      '- Mix question types for THIS scope: TEXT (~35%), SCALE (~25%, dept-level maturity ratings), SINGLE_CHOICE (~25%), MULTI_CHOICE (~15%)';
+    fewShotBlock = `
+
+Examples (illustrative — do NOT copy verbatim, adapt to the actual department facts above):
+  GOOD: "Of the workflows in ${ctx.scopedDepartment?.name ?? 'this dept'} (${(ctx.scopedDepartment?.workflows ?? []).map((w) => w.name).slice(0, 3).join(', ') || 'listed above'}), which one would deliver the biggest payoff if automated first?"
+  GOOD: "On a 1-5 scale, how confident is the ${ctx.scopedDepartment?.name ?? 'department'} team that current tools can scale with planned headcount?"
+  AVOID (too generic): "How do you measure your team's efficiency?"
+  AVOID (out of scope): "What's the company's overall vision for AI?"`;
+  } else {
+    typeMixLine =
+      '- Mix question types: TEXT (~45%), SINGLE_CHOICE/MULTI_CHOICE (~40%), SCALE (~15%)';
+    fewShotBlock = '';
+  }
+
+  const user = `Generate ${count} personalized consultation questions for this company.${scopeBlock}${followUpBlock}${scopedPriorBlock}
 
 Company Profile:
 - Name: ${ctx.organization.name}
@@ -212,14 +324,16 @@ Company Profile:
 ${scrapedSection}
 
 Requirements:
-- Questions must be SPECIFIC to this company — reference their industry, tools, challenges, and website findings
+- Questions must be SPECIFIC — reference real facts from the scope and profile above (workflow names, technologies, tools, products/services, pain points). Do NOT speak in generalities.
 - ${ctx.scrapedInsights?.aiDetected ? 'They already use AI — ask about depth, ROI, scaling plans, and gaps' : 'They appear to NOT use AI yet — ask about readiness, barriers, and use cases they see potential in'}
 - ${ctx.scrapedInsights?.automationDetected ? 'They have automation in place — explore what works, what doesn\'t, and expansion opportunities' : 'Limited automation detected — explore manual processes, bottlenecks, and automation appetite'}
-- Mix question types: TEXT (~45%), SINGLE_CHOICE/MULTI_CHOICE (~40%), SCALE (~15%)
+${ctx.scrapedInsights && ctx.scrapedInsights.technologies.length ? `- Anchor at least one question to a real item from their tech stack (${ctx.scrapedInsights.technologies.slice(0, 5).join(', ')}) or stated tools where relevant to this scope.` : ''}
+${ctx.scrapedInsights && (ctx.scrapedInsights.products.length || ctx.scrapedInsights.services.length) ? `- Their offerings include ${[...ctx.scrapedInsights.products, ...ctx.scrapedInsights.services].slice(0, 5).join(', ')} — connect at least one question to how this scope supports those offerings.` : ''}
+${typeMixLine}
 - For SINGLE_CHOICE and MULTI_CHOICE: provide 4-6 realistic options tailored to their context
 - For SCALE: range is always 1-5
 - Order from broad strategic questions to specific tactical ones
-- Do NOT ask things already known from the profile above
+- Do NOT ask things already known from the profile or prior consultation themes above${fewShotBlock}
 
 Return a JSON array:
 [

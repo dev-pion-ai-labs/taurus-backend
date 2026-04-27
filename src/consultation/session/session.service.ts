@@ -907,11 +907,13 @@ export class SessionService {
       }),
     ]);
 
-    const { scopedDepartment, scopedWorkflow } = await this.loadScopedContext(
-      session.scope,
-      session.departmentId,
-      session.workflowId,
-    );
+    const { scopedDepartment, scopedWorkflow, siblingDepartments } =
+      await this.loadScopedContext(
+        session.scope,
+        organizationId,
+        session.departmentId,
+        session.workflowId,
+      );
 
     // Follow-up detection: only meaningful for ORG-scope sessions. We pull the
     // most recent prior COMPLETED ORG session's answered questions to feed the
@@ -927,6 +929,7 @@ export class SessionService {
       scope: session.scope,
       scopedDepartment,
       scopedWorkflow,
+      siblingDepartments,
       isFollowUp,
       priorOrgAnswers,
       previousQA: answeredQuestions.map((sq) => ({
@@ -944,11 +947,13 @@ export class SessionService {
 
   /**
    * Returns the most recent prior COMPLETED ORG-level consultation's answered
-   * questions, capped at 20. Excludes the current session.
+   * questions, capped at 20. Optionally excludes a specific session id; when
+   * called from pre-gen (where no live session exists yet) `currentSessionId`
+   * is omitted and the latest completed ORG session is used as-is.
    */
   private async loadPriorOrgAnswers(
     organizationId: string,
-    currentSessionId: string,
+    currentSessionId?: string,
   ): Promise<{
     isFollowUp: boolean;
     priorOrgAnswers?: AdaptiveQuestionContext['priorOrgAnswers'];
@@ -958,7 +963,7 @@ export class SessionService {
         organizationId,
         scope: ConsultationScope.ORG,
         status: 'COMPLETED',
-        id: { not: currentSessionId },
+        ...(currentSessionId ? { id: { not: currentSessionId } } : {}),
       },
       orderBy: { completedAt: 'desc' },
       select: { id: true, completedAt: true },
@@ -1003,17 +1008,27 @@ export class SessionService {
     workflowId?: string,
   ): Promise<AdaptiveQuestionContext> {
     const orgCtx = await this.getOrgContext(organizationId);
-    const { scopedDepartment, scopedWorkflow } = await this.loadScopedContext(
-      scope,
-      departmentId ?? null,
-      workflowId ?? null,
-    );
+    const [scoped, prior] = await Promise.all([
+      this.loadScopedContext(
+        scope,
+        organizationId,
+        departmentId ?? null,
+        workflowId ?? null,
+      ),
+      // Surface ORG-level prior answers as grounding context for scoped pregen
+      // too — lets the AI avoid re-asking company-wide ground at the dept /
+      // workflow scope. No-op when this org has never completed a consultation.
+      this.loadPriorOrgAnswers(organizationId),
+    ]);
 
     return {
       ...orgCtx,
       scope,
-      scopedDepartment,
-      scopedWorkflow,
+      scopedDepartment: scoped.scopedDepartment,
+      scopedWorkflow: scoped.scopedWorkflow,
+      siblingDepartments: scoped.siblingDepartments,
+      isFollowUp: prior.isFollowUp,
+      priorOrgAnswers: prior.priorOrgAnswers,
       previousQA: [],
     };
   }
@@ -1075,22 +1090,37 @@ export class SessionService {
    * Loads the real Department/Workflow records for a scoped session. Returns
    * undefined for both when scope is ORG. Pulls only fields used by the prompt
    * preamble — no inference, no synthesis.
+   *
+   * For DEPARTMENT scope: also returns up to 5 sibling departments in the
+   * same org so the prompt can frame this dept relative to peers.
+   * For WORKFLOW scope: includes parent dept's `notes` plus up to 3 sibling
+   * workflows in the same dept for comparative grounding.
    */
   private async loadScopedContext(
     scope: ConsultationScope,
+    organizationId: string,
     departmentId: string | null,
     workflowId: string | null,
   ): Promise<{
     scopedDepartment?: ScopedDepartmentContext;
     scopedWorkflow?: ScopedWorkflowContext;
+    siblingDepartments?: AdaptiveQuestionContext['siblingDepartments'];
   }> {
     if (scope === ConsultationScope.ORG) return {};
 
     if (scope === ConsultationScope.DEPARTMENT && departmentId) {
-      const dept = await this.prisma.department.findUnique({
-        where: { id: departmentId },
-        include: { workflows: true },
-      });
+      const [dept, peers] = await Promise.all([
+        this.prisma.department.findUnique({
+          where: { id: departmentId },
+          include: { workflows: true },
+        }),
+        this.prisma.department.findMany({
+          where: { organizationId, id: { not: departmentId } },
+          select: { name: true, headcount: true },
+          take: 5,
+          orderBy: { createdAt: 'asc' },
+        }),
+      ]);
       if (!dept) return {};
       return {
         scopedDepartment: {
@@ -1108,6 +1138,7 @@ export class SessionService {
             priority: w.priority,
           })),
         },
+        siblingDepartments: peers,
       };
     }
 
@@ -1117,6 +1148,18 @@ export class SessionService {
         include: { department: true },
       });
       if (!wf) return {};
+      const siblings = await this.prisma.workflow.findMany({
+        where: { departmentId: wf.departmentId, id: { not: workflowId } },
+        select: {
+          name: true,
+          weeklyHours: true,
+          automationLevel: true,
+          painPoints: true,
+          priority: true,
+        },
+        take: 3,
+        orderBy: { priority: 'desc' },
+      });
       return {
         scopedWorkflow: {
           name: wf.name,
@@ -1129,7 +1172,9 @@ export class SessionService {
           department: {
             name: wf.department.name,
             headcount: wf.department.headcount,
+            notes: wf.department.notes,
           },
+          siblingWorkflows: siblings,
         },
       };
     }
