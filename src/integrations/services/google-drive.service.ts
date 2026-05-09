@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import { decryptToken, encryptToken } from '../crypto.util';
 
 @Injectable()
 export class GoogleDriveService {
@@ -26,11 +27,14 @@ export class GoogleDriveService {
       );
     }
 
-    let accessToken = connection.accessToken;
+    let accessToken = decryptToken(connection.accessToken) as string;
 
     // Refresh token if expired
     if (connection.tokenExpiresAt && new Date() >= connection.tokenExpiresAt) {
-      accessToken = await this.refreshToken(connection.id, connection.refreshToken);
+      accessToken = await this.refreshToken(
+        connection.id,
+        decryptToken(connection.refreshToken),
+      );
     }
 
     try {
@@ -176,7 +180,7 @@ export class GoogleDriveService {
     await this.prisma.integrationConnection.update({
       where: { id: connectionId },
       data: {
-        accessToken: data.access_token,
+        accessToken: encryptToken(data.access_token) as string,
         tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
       },
     });

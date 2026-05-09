@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import { decryptToken } from '../crypto.util';
 import type { PlanExecutionSummary } from '../../implementation/plan-executor.service';
 
 interface SlackMessage {
@@ -48,8 +49,10 @@ export class SlackService {
       return { error: 'Slack is not connected for this organization' };
     }
 
+    const token = decryptToken(connection.accessToken) as string;
+
     try {
-      const channel = message.channel || await this.getDefaultChannel(connection.accessToken);
+      const channel = message.channel || await this.getDefaultChannel(token);
       if (!channel) {
         this.logger.error(
           `Slack message failed for org ${organizationId}: no channel the bot is a member of`,
@@ -64,7 +67,7 @@ export class SlackService {
         fetch('https://slack.com/api/chat.postMessage', {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${connection.accessToken}`,
+            Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -86,7 +89,7 @@ export class SlackService {
       // Requires channels:join scope; if it's missing we fall through to the
       // normal error path with a clearer hint.
       if (!data.ok && data.error === 'not_in_channel') {
-        const joined = await this.tryJoinChannel(connection.accessToken, channel);
+        const joined = await this.tryJoinChannel(token, channel);
         if (joined) {
           response = await post();
           data = await response.json() as typeof data;
@@ -299,7 +302,7 @@ export class SlackService {
       throw new Error('Slack is not connected');
     }
 
-    return connection.accessToken;
+    return decryptToken(connection.accessToken) as string;
   }
 
   // ── Pre-built notification templates ───────────────────

@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import { decryptToken } from '../crypto.util';
 
 @Injectable()
 export class NotionService {
@@ -166,7 +167,7 @@ export class NotionService {
       throw new BadRequestException('Notion is not connected');
     }
 
-    return connection.accessToken;
+    return decryptToken(connection.accessToken) as string;
   }
 
   private async request(token: string, method: string, path: string, body?: unknown) {

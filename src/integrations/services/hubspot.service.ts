@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import { decryptToken, encryptToken } from '../crypto.util';
 
 @Injectable()
 export class HubSpotService {
@@ -162,10 +163,13 @@ export class HubSpotService {
 
     // Check token expiry and refresh if needed
     if (connection.tokenExpiresAt && new Date() >= connection.tokenExpiresAt && connection.refreshToken) {
-      return this.refreshToken(connection.id, connection.refreshToken);
+      return this.refreshToken(
+        connection.id,
+        decryptToken(connection.refreshToken) as string,
+      );
     }
 
-    return connection.accessToken;
+    return decryptToken(connection.accessToken) as string;
   }
 
   private async refreshToken(connectionId: string, refreshToken: string): Promise<string> {
@@ -187,8 +191,8 @@ export class HubSpotService {
     await this.prisma.integrationConnection.update({
       where: { id: connectionId },
       data: {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
+        accessToken: encryptToken(data.access_token) as string,
+        refreshToken: encryptToken(data.refresh_token),
         tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
       },
     });

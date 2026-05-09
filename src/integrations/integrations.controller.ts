@@ -17,6 +17,7 @@ import { JwtAuthGuard, CurrentUser } from '../common';
 import { IntegrationsService } from './integrations.service';
 import { GoogleDriveService } from './services/google-drive.service';
 import { ConnectIntegrationDto } from './dto';
+import { issueOAuthState, verifyOAuthState } from './crypto.util';
 
 @ApiTags('Integrations')
 @ApiBearerAuth()
@@ -45,6 +46,7 @@ export class IntegrationsController {
     @CurrentUser() user: { id: string; organizationId: string | null },
     @Param('provider') providerRaw: string,
     @Query('redirectUri') redirectUri: string,
+    @Query('env') env: string | undefined,
   ) {
     this.requireOrg(user.organizationId);
     const provider = this.parseProvider(providerRaw);
@@ -53,19 +55,23 @@ export class IntegrationsController {
       throw new BadRequestException('redirectUri query param is required');
     }
 
-    // State encodes org + user for the callback
-    const state = Buffer.from(
-      JSON.stringify({
-        orgId: user.organizationId,
-        userId: user.id,
-        provider: providerRaw,
-      }),
-    ).toString('base64url');
+    // Salesforce: only `production` (default) and `sandbox` are valid envs.
+    // Other providers ignore `env`.
+    const normalizedEnv =
+      provider === 'SALESFORCE' && env === 'sandbox' ? 'sandbox' : undefined;
+
+    const state = issueOAuthState({
+      orgId: user.organizationId,
+      userId: user.id,
+      provider: providerRaw,
+      env: normalizedEnv,
+    });
 
     const url = this.integrationsService.getAuthorizeUrl(
       provider,
       redirectUri,
       state,
+      normalizedEnv,
     );
 
     return { url };
@@ -82,12 +88,31 @@ export class IntegrationsController {
     this.requireOrg(user.organizationId);
     const provider = this.parseProvider(providerRaw);
 
-    // Verify state if present — defends against another tab/session swapping
-    // a foreign `code` into this user's callback. Tolerant for now (state is
-    // optional) so existing in-flight callbacks don't break; the frontend
-    // always forwards it.
+    // Verify state if present — HMAC-signed + TTL'd. Defends against another
+    // tab/session swapping a foreign `code` into this user's callback, and
+    // against a forged state crafted client-side. Still tolerant of legacy
+    // unsigned state so in-flight flows during deploy don't break.
+    let stateEnv: string | undefined;
     if (dto.state) {
-      this.verifyState(dto.state, user.id, user.organizationId, providerRaw);
+      let payload;
+      try {
+        payload = verifyOAuthState(dto.state);
+      } catch (err) {
+        throw new ForbiddenException(
+          err instanceof Error ? err.message : 'OAuth state is invalid',
+        );
+      }
+
+      if (
+        payload.userId !== user.id ||
+        payload.orgId !== user.organizationId ||
+        payload.provider !== providerRaw
+      ) {
+        throw new ForbiddenException(
+          'OAuth state mismatch — this callback does not belong to the current session',
+        );
+      }
+      stateEnv = payload.env;
     }
 
     const redirectUri =
@@ -99,6 +124,7 @@ export class IntegrationsController {
       redirectUri,
       user.organizationId,
       user.id,
+      stateEnv,
     );
   }
 
@@ -152,29 +178,4 @@ export class IntegrationsController {
     return upper;
   }
 
-  private verifyState(
-    rawState: string,
-    expectedUserId: string,
-    expectedOrgId: string,
-    expectedProvider: string,
-  ): void {
-    let decoded: { orgId?: string; userId?: string; provider?: string };
-    try {
-      decoded = JSON.parse(
-        Buffer.from(rawState, 'base64url').toString('utf-8'),
-      );
-    } catch {
-      throw new ForbiddenException('OAuth state is malformed');
-    }
-
-    if (
-      decoded.userId !== expectedUserId ||
-      decoded.orgId !== expectedOrgId ||
-      decoded.provider !== expectedProvider
-    ) {
-      throw new ForbiddenException(
-        'OAuth state mismatch — this callback does not belong to the current session',
-      );
-    }
-  }
 }
