@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import { decryptToken, encryptToken } from '../crypto.util';
 
 @Injectable()
 export class JiraService {
@@ -154,13 +155,16 @@ export class JiraService {
     }
 
     // Atlassian access tokens expire after 1 hour — refresh if needed.
-    let token = connection.accessToken;
+    let token = decryptToken(connection.accessToken) as string;
     if (
       connection.tokenExpiresAt &&
       new Date() >= connection.tokenExpiresAt &&
       connection.refreshToken
     ) {
-      token = await this.refreshToken(connection.id, connection.refreshToken);
+      token = await this.refreshToken(
+        connection.id,
+        decryptToken(connection.refreshToken) as string,
+      );
     }
 
     // Jira Cloud needs cloudId from accessible-resources
@@ -224,8 +228,10 @@ export class JiraService {
     await this.prisma.integrationConnection.update({
       where: { id: connectionId },
       data: {
-        accessToken: data.access_token,
-        ...(data.refresh_token && { refreshToken: data.refresh_token }),
+        accessToken: encryptToken(data.access_token) as string,
+        ...(data.refresh_token && {
+          refreshToken: encryptToken(data.refresh_token),
+        }),
         tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
       },
     });

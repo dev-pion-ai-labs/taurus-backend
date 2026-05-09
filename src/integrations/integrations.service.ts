@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { IntegrationProvider, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma';
 import { getProviderConfig } from './oauth-providers';
+import { encryptToken } from './crypto.util';
 
 /**
  * Translate provider error strings (or raw error bodies) into user-actionable
@@ -78,6 +79,7 @@ export class IntegrationsService {
     provider: IntegrationProvider,
     redirectUri: string,
     state: string,
+    env?: string,
   ): string {
     const providerConfig = getProviderConfig(provider);
     if (!providerConfig) {
@@ -103,6 +105,13 @@ export class IntegrationsService {
       state,
     });
 
+    // Salesforce: sandbox tenants use test.salesforce.com — switch the
+    // authorize host so users on Developer Edition / sandbox orgs can connect.
+    const authorizeUrl =
+      provider === 'SALESFORCE' && env === 'sandbox'
+        ? 'https://test.salesforce.com/services/oauth2/authorize'
+        : providerConfig.authorizeUrl;
+
     // Provider-specific params
     if (provider === 'SLACK') {
       params.set('scope', providerConfig.scopes.join(','));
@@ -118,7 +127,7 @@ export class IntegrationsService {
       params.set('scope', providerConfig.scopes.join(' '));
     }
 
-    return `${providerConfig.authorizeUrl}?${params.toString()}`;
+    return `${authorizeUrl}?${params.toString()}`;
   }
 
   // ── Exchange code for tokens ───────────────────────────
@@ -129,6 +138,7 @@ export class IntegrationsService {
     redirectUri: string,
     organizationId: string,
     userId: string,
+    env?: string,
   ) {
     const providerConfig = getProviderConfig(provider);
     if (!providerConfig) {
@@ -150,10 +160,16 @@ export class IntegrationsService {
       );
     }
 
+    // Salesforce sandbox uses test.salesforce.com for token exchange too.
+    const tokenUrl =
+      provider === 'SALESFORCE' && env === 'sandbox'
+        ? 'https://test.salesforce.com/services/oauth2/token'
+        : providerConfig.tokenUrl;
+
     // Exchange code for tokens
     const tokenData = await this.exchangeCode(
       provider,
-      providerConfig.tokenUrl,
+      tokenUrl,
       code,
       clientId,
       clientSecret,
@@ -168,6 +184,9 @@ export class IntegrationsService {
       );
     }
 
+    const encryptedAccess = encryptToken(tokenData.accessToken) as string;
+    const encryptedRefresh = encryptToken(tokenData.refreshToken ?? null);
+
     // Upsert the connection (one per org per provider)
     const connection = await this.prisma.integrationConnection.upsert({
       where: {
@@ -175,8 +194,8 @@ export class IntegrationsService {
       },
       update: {
         status: 'CONNECTED',
-        accessToken: tokenData.accessToken,
-        refreshToken: tokenData.refreshToken ?? null,
+        accessToken: encryptedAccess,
+        refreshToken: encryptedRefresh ?? null,
         tokenExpiresAt: tokenData.expiresAt ?? null,
         scope: tokenData.scope ?? null,
         externalTeamId: tokenData.teamId ?? null,
@@ -190,8 +209,8 @@ export class IntegrationsService {
         organizationId,
         provider,
         status: 'CONNECTED',
-        accessToken: tokenData.accessToken,
-        refreshToken: tokenData.refreshToken ?? null,
+        accessToken: encryptedAccess,
+        refreshToken: encryptedRefresh ?? null,
         tokenExpiresAt: tokenData.expiresAt ?? null,
         scope: tokenData.scope ?? null,
         externalTeamId: tokenData.teamId ?? null,
@@ -364,6 +383,25 @@ export class IntegrationsService {
           teamId: (data.workspace_id as string) || undefined,
           teamName: (data.workspace_name as string) || undefined,
           metadata: { botId: data.bot_id, owner: data.owner },
+        };
+      }
+
+      case 'SALESFORCE': {
+        // Salesforce returns `instance_url` per-org (sandbox vs prod, My
+        // Domain, etc.) — without this every API call defaults to
+        // login.salesforce.com which is wrong for most tenants.
+        const expiresIn = data.expires_in as number | undefined;
+        return {
+          accessToken: data.access_token as string,
+          refreshToken: data.refresh_token as string | undefined,
+          expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : undefined,
+          scope: data.scope as string | undefined,
+          metadata: {
+            instance_url: data.instance_url,
+            id: data.id,
+            issued_at: data.issued_at,
+            token_type: data.token_type,
+          },
         };
       }
 

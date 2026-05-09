@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
+import { decryptToken, encryptToken } from '../crypto.util';
 
 @Injectable()
 export class SalesforceService {
@@ -121,17 +122,29 @@ export class SalesforceService {
       throw new BadRequestException('Salesforce is not connected');
     }
 
-    // Instance URL is stored in metadata during OAuth
+    // Instance URL is stored in metadata during OAuth (per-org: prod/sandbox/
+    // My Domain). Without it, API calls fail for any tenant not on the
+    // default login.salesforce.com host — surface a clear error rather than
+    // a confusing 404.
     const metadata = connection.metadata as { instance_url?: string } | null;
-    const instanceUrl = metadata?.instance_url || 'https://login.salesforce.com';
+    const instanceUrl = metadata?.instance_url;
+    if (!instanceUrl) {
+      throw new BadRequestException(
+        'Salesforce connection is missing instance_url — please disconnect and reconnect',
+      );
+    }
 
     // Refresh if expired
     if (connection.tokenExpiresAt && new Date() >= connection.tokenExpiresAt && connection.refreshToken) {
-      const newToken = await this.refreshToken(connection.id, connection.refreshToken, instanceUrl);
+      const newToken = await this.refreshToken(
+        connection.id,
+        decryptToken(connection.refreshToken) as string,
+        instanceUrl,
+      );
       return { token: newToken, instanceUrl };
     }
 
-    return { token: connection.accessToken, instanceUrl };
+    return { token: decryptToken(connection.accessToken) as string, instanceUrl };
   }
 
   private async refreshToken(connectionId: string, refreshToken: string, instanceUrl: string): Promise<string> {
@@ -153,7 +166,7 @@ export class SalesforceService {
     await this.prisma.integrationConnection.update({
       where: { id: connectionId },
       data: {
-        accessToken: data.access_token,
+        accessToken: encryptToken(data.access_token) as string,
         tokenExpiresAt: new Date(Date.now() + 7200 * 1000), // SF tokens ~2hr
       },
     });
