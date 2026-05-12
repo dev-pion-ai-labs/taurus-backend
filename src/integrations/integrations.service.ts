@@ -187,7 +187,15 @@ export class IntegrationsService {
     const encryptedAccess = encryptToken(tokenData.accessToken) as string;
     const encryptedRefresh = encryptToken(tokenData.refreshToken ?? null);
 
-    // Upsert the connection (one per org per provider)
+    // Read the existing row (if any) so we can preserve fields the new token
+    // exchange doesn't return. Notably tokenExpiresAt: some providers omit
+    // expires_in on certain flows, and overwriting a real expiry with null
+    // would silently disable refresh.
+    const existing = await this.prisma.integrationConnection.findUnique({
+      where: { organizationId_provider: { organizationId, provider } },
+      select: { tokenExpiresAt: true },
+    });
+
     const connection = await this.prisma.integrationConnection.upsert({
       where: {
         organizationId_provider: { organizationId, provider },
@@ -196,7 +204,7 @@ export class IntegrationsService {
         status: 'CONNECTED',
         accessToken: encryptedAccess,
         refreshToken: encryptedRefresh ?? null,
-        tokenExpiresAt: tokenData.expiresAt ?? null,
+        tokenExpiresAt: tokenData.expiresAt ?? existing?.tokenExpiresAt ?? null,
         scope: tokenData.scope ?? null,
         externalTeamId: tokenData.teamId ?? null,
         externalTeamName: tokenData.teamName ?? null,

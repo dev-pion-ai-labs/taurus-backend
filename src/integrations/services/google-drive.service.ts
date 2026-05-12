@@ -1,12 +1,47 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
-import { decryptToken, encryptToken } from '../crypto.util';
+import { TokenManager, RefreshResult } from './token-manager';
 
 @Injectable()
-export class GoogleDriveService {
+export class GoogleDriveService implements OnModuleInit {
   private readonly logger = new Logger(GoogleDriveService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private tokenManager: TokenManager,
+  ) {}
+
+  onModuleInit() {
+    this.tokenManager.registerStrategy('GOOGLE_DRIVE', async (refreshToken) => {
+      const response = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: process.env.GOOGLE_CLIENT_ID || '',
+          client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+          refresh_token: refreshToken,
+          grant_type: 'refresh_token',
+        }).toString(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        access_token: string;
+        expires_in: number;
+        refresh_token?: string;
+      };
+
+      const result: RefreshResult = {
+        accessToken: data.access_token,
+        expiresAt: new Date(Date.now() + data.expires_in * 1000),
+      };
+      if (data.refresh_token) result.refreshToken = data.refresh_token;
+      return result;
+    });
+  }
 
   /** Export a document to Google Drive as a Google Doc */
   async exportDocument(
@@ -27,86 +62,69 @@ export class GoogleDriveService {
       );
     }
 
-    let accessToken = decryptToken(connection.accessToken) as string;
+    const boundary = 'taurus_export_boundary';
+    const metadata = {
+      name: title,
+      mimeType: 'application/vnd.google-apps.document',
+    };
+    const body = [
+      `--${boundary}`,
+      'Content-Type: application/json; charset=UTF-8',
+      '',
+      JSON.stringify(metadata),
+      `--${boundary}`,
+      `Content-Type: ${mimeType}`,
+      '',
+      content,
+      `--${boundary}--`,
+    ].join('\r\n');
 
-    // Refresh token if expired
-    if (connection.tokenExpiresAt && new Date() >= connection.tokenExpiresAt) {
-      accessToken = await this.refreshToken(
-        connection.id,
-        decryptToken(connection.refreshToken),
-      );
-    }
-
-    try {
-      // Create file metadata
-      const metadata = {
-        name: title,
-        mimeType: 'application/vnd.google-apps.document', // Convert to Google Doc
-      };
-
-      // Use multipart upload
-      const boundary = 'taurus_export_boundary';
-      const body = [
-        `--${boundary}`,
-        'Content-Type: application/json; charset=UTF-8',
-        '',
-        JSON.stringify(metadata),
-        `--${boundary}`,
-        `Content-Type: ${mimeType}`,
-        '',
-        content,
-        `--${boundary}--`,
-      ].join('\r\n');
-
-      const response = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': `multipart/related; boundary=${boundary}`,
+    const result = await this.tokenManager.withFreshToken(
+      connection,
+      (token) =>
+        fetch(
+          'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': `multipart/related; boundary=${boundary}`,
+            },
+            body,
           },
-          body,
-        },
-      );
+        ),
+      (res) => res.status === 401,
+    );
 
-      if (!response.ok) {
-        const error = await response.text();
-        this.logger.error(`Google Drive upload failed: ${error}`);
+    if (!result.ok) {
+      const errorText = await result.text();
+      this.logger.error(`Google Drive upload failed: ${result.status} ${errorText}`);
 
-        if (response.status === 401) {
-          await this.prisma.integrationConnection.update({
-            where: { id: connection.id },
-            data: { status: 'EXPIRED' },
-          });
-          throw new BadRequestException(
-            'Google Drive token expired — please reconnect in Settings',
-          );
-        }
-
-        throw new BadRequestException('Failed to export to Google Drive');
+      if (result.status === 401) {
+        await this.tokenManager.markExpired(connection.id);
+        throw new BadRequestException(
+          'Google Drive token expired — please reconnect in Settings',
+        );
       }
 
-      const file = (await response.json()) as {
-        id: string;
-        name: string;
-        webViewLink: string;
-      };
-
-      this.logger.log(
-        `Exported "${title}" to Google Drive for org ${organizationId} — file ${file.id}`,
-      );
-
-      return {
-        fileId: file.id,
-        fileName: file.name,
-        webViewLink: file.webViewLink,
-      };
-    } catch (error) {
-      if (error instanceof BadRequestException) throw error;
-      this.logger.error(`Google Drive export failed: ${(error as Error).message}`);
       throw new BadRequestException('Failed to export to Google Drive');
     }
+
+    const file = (await result.json()) as {
+      id: string;
+      name: string;
+      webViewLink: string;
+    };
+
+    this.logger.log(
+      `Exported "${title}" to Google Drive for org ${organizationId} — file ${file.id}`,
+    );
+
+    return {
+      fileId: file.id,
+      fileName: file.name,
+      webViewLink: file.webViewLink,
+    };
   }
 
   /** Export a transformation report to Google Drive */
@@ -138,54 +156,6 @@ export class GoogleDriveService {
     }
 
     return this.exportDocument(organizationId, artifact.title, artifact.content);
-  }
-
-  // ── Token refresh ──────────────────────────────────────
-
-  private async refreshToken(
-    connectionId: string,
-    refreshToken: string | null,
-  ): Promise<string> {
-    if (!refreshToken) {
-      throw new BadRequestException(
-        'Google Drive token expired and no refresh token available — please reconnect',
-      );
-    }
-
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId || '',
-        client_secret: clientSecret || '',
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }).toString(),
-    });
-
-    if (!response.ok) {
-      throw new BadRequestException(
-        'Failed to refresh Google Drive token — please reconnect',
-      );
-    }
-
-    const data = (await response.json()) as {
-      access_token: string;
-      expires_in: number;
-    };
-
-    await this.prisma.integrationConnection.update({
-      where: { id: connectionId },
-      data: {
-        accessToken: encryptToken(data.access_token) as string,
-        tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
-      },
-    });
-
-    return data.access_token;
   }
 
   // ── Report formatting ──────────────────────────────────

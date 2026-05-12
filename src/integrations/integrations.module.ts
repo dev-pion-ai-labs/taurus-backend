@@ -7,11 +7,13 @@ import { JiraService } from './services/jira.service';
 import { NotionService } from './services/notion.service';
 import { HubSpotService } from './services/hubspot.service';
 import { SalesforceService } from './services/salesforce.service';
+import { TokenManager } from './services/token-manager';
 
 @Module({
   controllers: [IntegrationsController],
   providers: [
     IntegrationsService,
+    TokenManager,
     SlackService,
     GoogleDriveService,
     JiraService,

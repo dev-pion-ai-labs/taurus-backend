@@ -1,12 +1,103 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
-import { decryptToken, encryptToken } from '../crypto.util';
+import { TokenManager, RefreshResult } from './token-manager';
 
 @Injectable()
-export class SalesforceService {
+export class SalesforceService implements OnModuleInit {
   private readonly logger = new Logger(SalesforceService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private tokenManager: TokenManager,
+  ) {}
+
+  onModuleInit() {
+    this.tokenManager.registerStrategy('SALESFORCE', async (refreshToken, connection) => {
+      const metadata = (connection.metadata as { instance_url?: string } | null) ?? null;
+      const instanceUrl = metadata?.instance_url;
+      if (!instanceUrl) {
+        throw new Error('Salesforce connection is missing instance_url');
+      }
+
+      const response = await fetch(`${instanceUrl}/services/oauth2/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: process.env.SALESFORCE_CLIENT_ID || '',
+          client_secret: process.env.SALESFORCE_CLIENT_SECRET || '',
+          refresh_token: refreshToken,
+        }).toString(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        access_token: string;
+        instance_url?: string;
+        id?: string;
+        issued_at?: string;
+        expires_in?: number;
+        refresh_token?: string;
+      };
+
+      // Real session timeout: prefer the rare expires_in in the response,
+      // else the org's configured session_timeout_seconds via the identity
+      // endpoint (data.id), else fall back to 2h. The hardcoded 7200s in the
+      // old code broke any org with a shorter (or longer) configured timeout.
+      let expiresInSeconds = data.expires_in;
+      let sessionTimeoutSeconds: number | undefined;
+      if (!expiresInSeconds && data.id) {
+        sessionTimeoutSeconds = await this.fetchSessionTimeout(
+          data.id,
+          data.access_token,
+        );
+        if (sessionTimeoutSeconds) expiresInSeconds = sessionTimeoutSeconds;
+      }
+      if (!expiresInSeconds) expiresInSeconds = 7200;
+
+      const result: RefreshResult = {
+        accessToken: data.access_token,
+        expiresAt: new Date(Date.now() + expiresInSeconds * 1000),
+      };
+      if (data.refresh_token) result.refreshToken = data.refresh_token;
+
+      const metaUpdates: Record<string, unknown> = {};
+      if (data.instance_url) metaUpdates.instance_url = data.instance_url;
+      if (sessionTimeoutSeconds) metaUpdates.session_timeout_seconds = sessionTimeoutSeconds;
+      if (Object.keys(metaUpdates).length) result.metadata = metaUpdates;
+
+      return result;
+    });
+  }
+
+  /**
+   * Call the Salesforce identity endpoint (returned as `id` in the refresh
+   * response) to read the org's configured session_timeout_seconds. Returns
+   * undefined on any error so the caller can fall back to its default.
+   */
+  private async fetchSessionTimeout(
+    identityUrl: string,
+    accessToken: string,
+  ): Promise<number | undefined> {
+    try {
+      const response = await fetch(`${identityUrl}?version=latest`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) return undefined;
+      const data = (await response.json()) as { session_timeout_seconds?: number };
+      return typeof data.session_timeout_seconds === 'number'
+        ? data.session_timeout_seconds
+        : undefined;
+    } catch (error) {
+      this.logger.warn(
+        `Salesforce identity-endpoint lookup failed: ${(error as Error).message}`,
+      );
+      return undefined;
+    }
+  }
 
   // ── Records ────────────────────────────────────────────
 
@@ -16,10 +107,8 @@ export class SalesforceService {
     objectType: string,
     fields: Record<string, unknown>,
   ) {
-    const { token, instanceUrl } = await this.getConnection(organizationId);
-
-    const response = await this.request(
-      token, instanceUrl, 'POST', `/services/data/v59.0/sobjects/${objectType}`, fields,
+    const response = await this.callSf(
+      organizationId, 'POST', `/services/data/v59.0/sobjects/${objectType}`, fields,
     );
 
     this.logger.log(`Created Salesforce ${objectType} ${response.id} for org ${organizationId}`);
@@ -33,10 +122,8 @@ export class SalesforceService {
     recordId: string,
     fields: Record<string, unknown>,
   ) {
-    const { token, instanceUrl } = await this.getConnection(organizationId);
-
-    await this.request(
-      token, instanceUrl, 'PATCH',
+    await this.callSf(
+      organizationId, 'PATCH',
       `/services/data/v59.0/sobjects/${objectType}/${recordId}`, fields,
     );
 
@@ -45,10 +132,8 @@ export class SalesforceService {
 
   /** Query records using SOQL */
   async query(organizationId: string, soql: string) {
-    const { token, instanceUrl } = await this.getConnection(organizationId);
-
-    const response = await this.request(
-      token, instanceUrl, 'GET',
+    const response = await this.callSf(
+      organizationId, 'GET',
       `/services/data/v59.0/query?q=${encodeURIComponent(soql)}`,
     );
 
@@ -113,7 +198,12 @@ export class SalesforceService {
 
   // ── Connection + Request ───────────────────────────────
 
-  private async getConnection(organizationId: string) {
+  private async callSf(
+    organizationId: string,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<any> {
     const connection = await this.prisma.integrationConnection.findUnique({
       where: { organizationId_provider: { organizationId, provider: 'SALESFORCE' } },
     });
@@ -122,10 +212,6 @@ export class SalesforceService {
       throw new BadRequestException('Salesforce is not connected');
     }
 
-    // Instance URL is stored in metadata during OAuth (per-org: prod/sandbox/
-    // My Domain). Without it, API calls fail for any tenant not on the
-    // default login.salesforce.com host — surface a clear error rather than
-    // a confusing 404.
     const metadata = connection.metadata as { instance_url?: string } | null;
     const instanceUrl = metadata?.instance_url;
     if (!instanceUrl) {
@@ -134,55 +220,19 @@ export class SalesforceService {
       );
     }
 
-    // Refresh if expired
-    if (connection.tokenExpiresAt && new Date() >= connection.tokenExpiresAt && connection.refreshToken) {
-      const newToken = await this.refreshToken(
-        connection.id,
-        decryptToken(connection.refreshToken) as string,
-        instanceUrl,
-      );
-      return { token: newToken, instanceUrl };
-    }
-
-    return { token: decryptToken(connection.accessToken) as string, instanceUrl };
-  }
-
-  private async refreshToken(connectionId: string, refreshToken: string, instanceUrl: string): Promise<string> {
-    const response = await fetch(`${instanceUrl}/services/oauth2/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        client_id: process.env.SALESFORCE_CLIENT_ID || '',
-        client_secret: process.env.SALESFORCE_CLIENT_SECRET || '',
-        refresh_token: refreshToken,
-      }).toString(),
-    });
-
-    if (!response.ok) throw new BadRequestException('Salesforce token refresh failed — reconnect');
-
-    const data = (await response.json()) as { access_token: string };
-
-    await this.prisma.integrationConnection.update({
-      where: { id: connectionId },
-      data: {
-        accessToken: encryptToken(data.access_token) as string,
-        tokenExpiresAt: new Date(Date.now() + 7200 * 1000), // SF tokens ~2hr
-      },
-    });
-
-    return data.access_token;
-  }
-
-  private async request(token: string, instanceUrl: string, method: string, path: string, body?: unknown) {
-    const response = await fetch(`${instanceUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
+    const response = await this.tokenManager.withFreshToken(
+      connection,
+      (token) =>
+        fetch(`${instanceUrl}${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        }),
+      (res) => res.status === 401,
+    );
 
     if (!response.ok) {
       const error = await response.text();

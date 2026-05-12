@@ -1,12 +1,47 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
-import { decryptToken, encryptToken } from '../crypto.util';
+import { TokenManager, RefreshResult } from './token-manager';
 
 @Injectable()
-export class JiraService {
+export class JiraService implements OnModuleInit {
   private readonly logger = new Logger(JiraService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private tokenManager: TokenManager,
+  ) {}
+
+  onModuleInit() {
+    this.tokenManager.registerStrategy('JIRA', async (refreshToken) => {
+      const response = await fetch('https://auth.atlassian.com/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          client_id: process.env.JIRA_CLIENT_ID || '',
+          client_secret: process.env.JIRA_CLIENT_SECRET || '',
+          refresh_token: refreshToken,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        access_token: string;
+        expires_in: number;
+        refresh_token?: string;
+      };
+
+      const result: RefreshResult = {
+        accessToken: data.access_token,
+        expiresAt: new Date(Date.now() + data.expires_in * 1000),
+      };
+      if (data.refresh_token) result.refreshToken = data.refresh_token;
+      return result;
+    });
+  }
 
   // ── Core Actions ───────────────────────────────────────
 
@@ -23,8 +58,6 @@ export class JiraService {
       labels?: string[];
     },
   ) {
-    const { token, cloudId } = await this.getConnection(organizationId);
-
     const body: Record<string, unknown> = {
       fields: {
         project: { key: opts.projectKey },
@@ -48,7 +81,7 @@ export class JiraService {
       },
     };
 
-    const response = await this.request(token, cloudId, 'POST', '/rest/api/3/issue', body);
+    const response = await this.callJira(organizationId, 'POST', '/rest/api/3/issue', body);
     this.logger.log(`Created Jira issue ${response.key} for org ${organizationId}`);
     return { issueId: response.id, key: response.key, self: response.self };
   }
@@ -59,11 +92,8 @@ export class JiraService {
     issueKey: string,
     targetStatus: string,
   ) {
-    const { token, cloudId } = await this.getConnection(organizationId);
-
-    // Get available transitions
-    const transitions = await this.request(
-      token, cloudId, 'GET', `/rest/api/3/issue/${issueKey}/transitions`,
+    const transitions = await this.callJira(
+      organizationId, 'GET', `/rest/api/3/issue/${issueKey}/transitions`,
     );
 
     const match = transitions.transitions?.find(
@@ -77,7 +107,7 @@ export class JiraService {
       );
     }
 
-    await this.request(token, cloudId, 'POST', `/rest/api/3/issue/${issueKey}/transitions`, {
+    await this.callJira(organizationId, 'POST', `/rest/api/3/issue/${issueKey}/transitions`, {
       transition: { id: match.id },
     });
 
@@ -87,21 +117,16 @@ export class JiraService {
 
   /** Assign an issue */
   async assignIssue(organizationId: string, issueKey: string, accountId: string) {
-    const { token, cloudId } = await this.getConnection(organizationId);
-
-    await this.request(token, cloudId, 'PUT', `/rest/api/3/issue/${issueKey}/assignee`, {
+    await this.callJira(organizationId, 'PUT', `/rest/api/3/issue/${issueKey}/assignee`, {
       accountId,
     });
-
     return { issueKey, assignee: accountId };
   }
 
   /** Add a comment to an issue */
   async addComment(organizationId: string, issueKey: string, text: string) {
-    const { token, cloudId } = await this.getConnection(organizationId);
-
-    const response = await this.request(
-      token, cloudId, 'POST', `/rest/api/3/issue/${issueKey}/comment`,
+    const response = await this.callJira(
+      organizationId, 'POST', `/rest/api/3/issue/${issueKey}/comment`,
       {
         body: {
           type: 'doc',
@@ -118,9 +143,7 @@ export class JiraService {
 
   /** List projects (for discovering project keys) */
   async listProjects(organizationId: string) {
-    const { token, cloudId } = await this.getConnection(organizationId);
-
-    const response = await this.request(token, cloudId, 'GET', '/rest/api/3/project');
+    const response = await this.callJira(organizationId, 'GET', '/rest/api/3/project');
     return (response as { key: string; name: string; id: string }[]).map((p) => ({
       id: p.id,
       key: p.key,
@@ -130,10 +153,8 @@ export class JiraService {
 
   /** Search users (for assigning) */
   async searchUsers(organizationId: string, query: string) {
-    const { token, cloudId } = await this.getConnection(organizationId);
-
-    const response = await this.request(
-      token, cloudId, 'GET', `/rest/api/3/user/search?query=${encodeURIComponent(query)}`,
+    const response = await this.callJira(
+      organizationId, 'GET', `/rest/api/3/user/search?query=${encodeURIComponent(query)}`,
     );
 
     return (response as { accountId: string; displayName: string; emailAddress?: string }[]).map((u) => ({
@@ -145,7 +166,12 @@ export class JiraService {
 
   // ── Connection + Request ───────────────────────────────
 
-  private async getConnection(organizationId: string) {
+  private async callJira(
+    organizationId: string,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<any> {
     const connection = await this.prisma.integrationConnection.findUnique({
       where: { organizationId_provider: { organizationId, provider: 'JIRA' } },
     });
@@ -154,109 +180,28 @@ export class JiraService {
       throw new BadRequestException('Jira is not connected');
     }
 
-    // Atlassian access tokens expire after 1 hour — refresh if needed.
-    let token = decryptToken(connection.accessToken) as string;
-    if (
-      connection.tokenExpiresAt &&
-      new Date() >= connection.tokenExpiresAt &&
-      connection.refreshToken
-    ) {
-      token = await this.refreshToken(
-        connection.id,
-        decryptToken(connection.refreshToken) as string,
-      );
-    }
-
-    // Jira Cloud needs cloudId from accessible-resources
+    // Resolve cloudId (cached on connection.externalTeamId after first call).
     let cloudId = connection.externalTeamId;
     if (!cloudId) {
-      const resources = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const raw = (await resources.json()) as unknown;
-      if (!Array.isArray(raw)) {
-        this.logger.error(
-          `Jira accessible-resources returned non-array (${resources.status}): ${JSON.stringify(raw).slice(0, 200)}`,
-        );
-        throw new BadRequestException(
-          `Jira connection is invalid — reconnect (HTTP ${resources.status})`,
-        );
-      }
-      const sites = raw as { id: string; name: string }[];
-      if (sites.length === 0) throw new BadRequestException('No Jira sites accessible');
-      cloudId = sites[0].id;
-
-      // Cache the cloudId
-      await this.prisma.integrationConnection.update({
-        where: { id: connection.id },
-        data: { externalTeamId: cloudId, externalTeamName: sites[0].name },
-      });
+      const probeToken = await this.tokenManager.getAccessToken(connection);
+      cloudId = await this.resolveCloudId(connection.id, probeToken);
     }
 
-    return { token, cloudId };
-  }
-
-  private async refreshToken(
-    connectionId: string,
-    refreshToken: string,
-  ): Promise<string> {
-    const response = await fetch('https://auth.atlassian.com/oauth/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        client_id: process.env.JIRA_CLIENT_ID || '',
-        client_secret: process.env.JIRA_CLIENT_SECRET || '',
-        refresh_token: refreshToken,
-      }),
-    });
-
-    if (!response.ok) {
-      await this.prisma.integrationConnection.update({
-        where: { id: connectionId },
-        data: { status: 'EXPIRED' },
-      });
-      throw new BadRequestException('Jira token refresh failed — reconnect');
-    }
-
-    const data = (await response.json()) as {
-      access_token: string;
-      expires_in: number;
-      refresh_token?: string;
-    };
-
-    await this.prisma.integrationConnection.update({
-      where: { id: connectionId },
-      data: {
-        accessToken: encryptToken(data.access_token) as string,
-        ...(data.refresh_token && {
-          refreshToken: encryptToken(data.refresh_token),
-        }),
-        tokenExpiresAt: new Date(Date.now() + data.expires_in * 1000),
-      },
-    });
-
-    this.logger.log(`Refreshed Jira token for connection ${connectionId}`);
-    return data.access_token;
-  }
-
-  private async request(
-    token: string,
-    cloudId: string,
-    method: string,
-    path: string,
-    body?: unknown,
-  ) {
     const url = `https://api.atlassian.com/ex/jira/${cloudId}${path}`;
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
+    const response = await this.tokenManager.withFreshToken(
+      connection,
+      (token) =>
+        fetch(url, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        }),
+      (res) => res.status === 401,
+    );
 
     if (!response.ok) {
       const error = await response.text();
@@ -266,5 +211,29 @@ export class JiraService {
 
     if (response.status === 204) return {};
     return response.json();
+  }
+
+  private async resolveCloudId(connectionId: string, token: string): Promise<string> {
+    const resources = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const raw = (await resources.json()) as unknown;
+    if (!Array.isArray(raw)) {
+      this.logger.error(
+        `Jira accessible-resources returned non-array (${resources.status}): ${JSON.stringify(raw).slice(0, 200)}`,
+      );
+      throw new BadRequestException(
+        `Jira connection is invalid — reconnect (HTTP ${resources.status})`,
+      );
+    }
+    const sites = raw as { id: string; name: string }[];
+    if (sites.length === 0) throw new BadRequestException('No Jira sites accessible');
+
+    await this.prisma.integrationConnection.update({
+      where: { id: connectionId },
+      data: { externalTeamId: sites[0].id, externalTeamName: sites[0].name },
+    });
+
+    return sites[0].id;
   }
 }
