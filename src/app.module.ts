@@ -21,6 +21,7 @@ import { DiscoveryModule } from './discovery';
 import { StackModule } from './stack';
 import { ImplementationModule } from './implementation/implementation.module';
 import { IntegrationsModule } from './integrations';
+import { McpModule } from './mcp/mcp.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { IntegrationsModule } from './integrations';
     StackModule,
     ImplementationModule,
     IntegrationsModule,
+    McpModule,
     HealthModule,
   ],
   providers: [
