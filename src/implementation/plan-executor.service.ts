@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma';
 import { McpToolRouter } from '../mcp/core/mcp-tool-router';
+import { isToolError, ToolErrorEnvelope } from '../mcp/core/tool-result';
 import { SlackService } from '../integrations/services/slack.service';
 import { TrackerService } from '../tracker/tracker.service';
 import type { DeploymentStepPlan } from '../ai/implementation-ai.service';
@@ -140,7 +141,11 @@ export class PlanExecutorService {
         ...step,
         status: 'executing',
         startedAt: new Date().toISOString(),
+        // Clear prior-run state so a later step substituting
+        // {{steps[i].result.x}} can't pick up stale data if this re-run fails
+        // before writing a new result.
         error: undefined,
+        result: undefined,
         params: substitution.params,
       };
       await this.persistSteps(planId, executed);
@@ -152,17 +157,19 @@ export class PlanExecutorService {
           { orgId: organizationId, executionMode: 'approved-execution' },
         );
 
-        if (this.isErrorResult(raw)) {
+        if (isToolError(raw)) {
+          const envelope = raw as ToolErrorEnvelope;
+          const errorText = `${envelope.code}: ${envelope.message}`;
           executed[i] = {
             ...executed[i],
             status: 'failed',
-            error: (raw as { error: string }).error,
+            error: errorText,
             completedAt: new Date().toISOString(),
           };
           failedIndices.add(i);
           summary.failed += 1;
           this.logger.warn(
-            `[${planId}] step ${i} (${step.tool}) failed: ${(raw as { error: string }).error}`,
+            `[${planId}] step ${i} (${step.tool}) failed: ${errorText}`,
           );
         } else {
           executed[i] = {
@@ -210,15 +217,6 @@ export class PlanExecutorService {
     return raw as DeploymentStepPlan[];
   }
 
-  private isErrorResult(raw: unknown): boolean {
-    return (
-      !!raw &&
-      typeof raw === 'object' &&
-      'error' in (raw as Record<string, unknown>) &&
-      typeof (raw as Record<string, unknown>).error === 'string'
-    );
-  }
-
   /**
    * Resolve `{{steps[N].result.path.to.field}}` references in a params object
    * against previously-completed steps. Returns { ok: true, params } with the
@@ -249,6 +247,10 @@ export class PlanExecutorService {
 
         if (!ref || ref.status !== 'completed' || ref.result === undefined) {
           error = `unresolved reference ${value} — step ${stepIdx} not completed`;
+          return value;
+        }
+        if (isToolError(ref.result)) {
+          error = `unresolved reference ${value} — step ${stepIdx} returned an error envelope`;
           return value;
         }
 

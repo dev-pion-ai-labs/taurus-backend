@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma';
 import { decryptToken } from '../crypto.util';
 import type { PlanExecutionSummary } from '../../implementation/plan-executor.service';
@@ -26,14 +26,12 @@ export class SlackService {
   /**
    * Send a message to the connected Slack workspace.
    *
-   * Return shape is intentionally aligned with other action methods so the
-   * PlanExecutor's {error}-based failure detection can catch problems:
-   *   - success: { ok: true, ts, channel }
-   *   - failure: { error: string }   (also marks the integration EXPIRED on
-   *     token_expired / invalid_auth)
+   * Throws BadRequestException on any failure so callers in the MCP write-tool
+   * path get a real failure envelope (matches the Jira/Notion/etc. pattern).
+   * Token errors flip the connection to EXPIRED before the throw.
    *
-   * Fire-and-forget notify* wrappers don't inspect the return value, so they
-   * continue to work unchanged.
+   * Fire-and-forget notify* wrappers attach .catch(() => {}) at the call site,
+   * so silent-skip behaviour for notifications is preserved.
    */
   async sendMessage(organizationId: string, message: SlackMessage) {
     const connection = await this.prisma.integrationConnection.findUnique({
@@ -46,82 +44,76 @@ export class SlackService {
       this.logger.debug(
         `Slack not connected for org ${organizationId}, skipping notification`,
       );
-      return { error: 'Slack is not connected for this organization' };
+      throw new BadRequestException('Slack is not connected for this organization');
     }
 
     const token = decryptToken(connection.accessToken) as string;
 
-    try {
-      const channel = message.channel || await this.getDefaultChannel(token);
-      if (!channel) {
-        this.logger.error(
-          `Slack message failed for org ${organizationId}: no channel the bot is a member of`,
-        );
-        return {
-          error:
-            'Slack bot is not a member of any channel — invite it with /invite @<bot> in the target channel or add the chat:write.public scope.',
-        };
-      }
-
-      const post = async () =>
-        fetch('https://slack.com/api/chat.postMessage', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            channel,
-            text: message.text,
-            blocks: message.blocks,
-          }),
-        });
-
-      let response = await post();
-      let data = await response.json() as {
-        ok: boolean;
-        error?: string;
-        ts?: string;
-        channel?: string;
-      };
-
-      // If the bot isn't in the channel, try to join it and retry once.
-      // Requires channels:join scope; if it's missing we fall through to the
-      // normal error path with a clearer hint.
-      if (!data.ok && data.error === 'not_in_channel') {
-        const joined = await this.tryJoinChannel(token, channel);
-        if (joined) {
-          response = await post();
-          data = await response.json() as typeof data;
-        }
-      }
-
-      if (!data.ok) {
-        const hint =
-          data.error === 'not_in_channel'
-            ? ` — invite the bot with "/invite @<bot>" in that channel, or add the chat:write.public scope`
-            : '';
-        this.logger.error(
-          `Slack message failed for org ${organizationId}: ${data.error}${hint}`,
-        );
-
-        // Mark as expired if token issue
-        if (data.error === 'token_expired' || data.error === 'invalid_auth') {
-          await this.prisma.integrationConnection.update({
-            where: { id: connection.id },
-            data: { status: 'EXPIRED' },
-          });
-        }
-
-        return { error: data.error || 'Slack API returned ok=false' };
-      }
-
-      return { ok: true, ts: data.ts, channel: data.channel };
-    } catch (error) {
-      const msg = (error as Error).message;
-      this.logger.error(`Slack send failed: ${msg}`);
-      return { error: msg };
+    const channel = message.channel || await this.getDefaultChannel(token);
+    if (!channel) {
+      this.logger.error(
+        `Slack message failed for org ${organizationId}: no channel the bot is a member of`,
+      );
+      throw new BadRequestException(
+        'Slack bot is not a member of any channel — invite it with /invite @<bot> in the target channel or add the chat:write.public scope.',
+      );
     }
+
+    const post = async () =>
+      fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          channel,
+          text: message.text,
+          blocks: message.blocks,
+        }),
+      });
+
+    let response = await post();
+    let data = await response.json() as {
+      ok: boolean;
+      error?: string;
+      ts?: string;
+      channel?: string;
+    };
+
+    // If the bot isn't in the channel, try to join it and retry once.
+    // Requires channels:join scope; if it's missing we fall through to the
+    // normal error path with a clearer hint.
+    if (!data.ok && data.error === 'not_in_channel') {
+      const joined = await this.tryJoinChannel(token, channel);
+      if (joined) {
+        response = await post();
+        data = await response.json() as typeof data;
+      }
+    }
+
+    if (!data.ok) {
+      const hint =
+        data.error === 'not_in_channel'
+          ? ' — invite the bot with "/invite @<bot>" in that channel, or add the chat:write.public scope'
+          : '';
+      this.logger.error(
+        `Slack message failed for org ${organizationId}: ${data.error}${hint}`,
+      );
+
+      if (data.error === 'token_expired' || data.error === 'invalid_auth') {
+        await this.prisma.integrationConnection.update({
+          where: { id: connection.id },
+          data: { status: 'EXPIRED' },
+        });
+      }
+
+      throw new BadRequestException(
+        `Slack API error: ${data.error || 'ok=false'}${hint}`,
+      );
+    }
+
+    return { ok: true, ts: data.ts, channel: data.channel };
   }
 
   /** Get the id of the first public channel the bot is actually a member of. */
@@ -193,8 +185,11 @@ export class SlackService {
     const data = await response.json() as { ok: boolean; channel?: { id: string; name: string }; error?: string };
     if (!data.ok) {
       this.logger.error(`Failed to create channel: ${data.error}`);
-      if (data.error === 'name_taken') return { channelId: null, error: 'Channel name already taken' };
-      return { channelId: null, error: data.error };
+      const message =
+        data.error === 'name_taken'
+          ? 'Channel name already taken'
+          : `Slack API error: ${data.error || 'ok=false'}`;
+      throw new BadRequestException(message);
     }
 
     this.logger.log(`Created Slack channel #${data.channel!.name} for org ${organizationId}`);
@@ -215,45 +210,41 @@ export class SlackService {
     });
 
     const data = await response.json() as { ok: boolean; error?: string };
-    return { ok: data.ok, error: data.error };
+    if (!data.ok) {
+      throw new BadRequestException(
+        `Slack API error: ${data.error || 'ok=false'}`,
+      );
+    }
+    return { ok: true };
   }
 
   /** Set channel topic */
   async setChannelTopic(organizationId: string, channelId: string, topic: string) {
-    let token: string;
-    try {
-      token = await this.getConnectionToken(organizationId);
-    } catch (error) {
-      return { error: (error as Error).message };
-    }
+    const token = await this.getConnectionToken(organizationId);
 
-    try {
-      const response = await fetch(
-        'https://slack.com/api/conversations.setTopic',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ channel: channelId, topic }),
+    const response = await fetch(
+      'https://slack.com/api/conversations.setTopic',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ channel: channelId, topic }),
+      },
+    );
+
+    const data = (await response.json()) as { ok: boolean; error?: string };
+    if (!data.ok) {
+      this.logger.error(
+        `Slack setChannelTopic failed for ${channelId}: ${data.error}`,
       );
-
-      const data = (await response.json()) as { ok: boolean; error?: string };
-      if (!data.ok) {
-        this.logger.error(
-          `Slack setChannelTopic failed for ${channelId}: ${data.error}`,
-        );
-        return { error: data.error || 'Slack API returned ok=false' };
-      }
-
-      return { channelId, topic };
-    } catch (error) {
-      const msg = (error as Error).message;
-      this.logger.error(`Slack setChannelTopic failed: ${msg}`);
-      return { error: msg };
+      throw new BadRequestException(
+        `Slack API error: ${data.error || 'ok=false'}`,
+      );
     }
+
+    return { channelId, topic };
   }
 
   /** List workspace users */

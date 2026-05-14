@@ -59,6 +59,25 @@ describe('SlackMcpServer parity', () => {
     expect(out).toEqual([{ id: 'C1', name: 'x' }]);
   });
 
+  it('wraps a SlackService throw into a TOOL_FAILED envelope', async () => {
+    const slack = makeSlackStub();
+    slack.sendMessage = jest
+      .fn()
+      .mockRejectedValue(new Error('Slack is not connected for this organization'));
+    const router = new McpToolRouter(new McpServerFactory(), [
+      new SlackMcpServer(slack)]);
+
+    const out = (await router.invoke(
+      'slack_send_message',
+      { channel: 'C1', text: 'hi' },
+      { orgId: 'org_1', executionMode: 'approved-execution' },
+    )) as { error?: boolean; code?: string; message?: string };
+
+    expect(out.error).toBe(true);
+    expect(out.code).toBe('TOOL_FAILED');
+    expect(out.message).toContain('not connected');
+  });
+
   it('returns dry-run envelope for slack_send_message during planning', async () => {
     const slack = makeSlackStub();
     const router = new McpToolRouter(new McpServerFactory(), [new SlackMcpServer(slack)]);

@@ -53,24 +53,6 @@ export interface PlanResult {
   deploymentSteps: DeploymentStepPlan[];
 }
 
-// Allow-list of write tool names the PlanExecutor may schedule into a deploymentStep.
-// Read-only tools (list_*, search, query) and internal context tools are filtered out
-// so the AI can't accidentally schedule a read as a deployment action.
-const EXECUTABLE_TOOL_NAMES = new Set<string>([
-  'slack_create_channel',
-  'slack_send_message',
-  'slack_set_channel_topic',
-  'gdrive_create_document',
-  'jira_create_issue',
-  'jira_transition_issue',
-  'jira_add_comment',
-  'notion_create_page',
-  'notion_create_database',
-  'hubspot_create_contact',
-  'hubspot_create_deal',
-  'salesforce_create_record',
-]);
-
 const VALID_PROVIDERS = new Set<IntegrationProvider>([
   'SLACK',
   'GOOGLE_DRIVE',
@@ -204,15 +186,16 @@ export class ImplementationAiService {
         for (const block of response.content) {
           if (block.type === 'tool_use') {
             this.logger.debug(`Tool call: ${block.name}`);
-            // Planning loop runs in approved-execution mode for behavioural
-            // parity with the legacy executor. To activate the sensitivity-
-            // based dry-run gate (writes return preview envelopes during
-            // planning), switch this to 'planning' and update the planner
-            // prompt to teach Claude how to interpret the dry-run envelope.
+            // Planning runs in dry-run mode: read tools execute for real
+            // (so the AI can discover IDs), write/destructive tools return
+            // a { wouldExecute, summary, params } preview envelope instead
+            // of mutating external state. The planner prompt explains how
+            // to interpret the envelope — search for "DRY-RUN" in the
+            // system prompt.
             const result = await this.mcpRouter.invoke(
               block.name,
               block.input as Record<string, unknown>,
-              { orgId: organizationId, executionMode: 'approved-execution' },
+              { orgId: organizationId, executionMode: 'planning' },
             );
             toolResults.push({
               type: 'tool_result',
@@ -288,6 +271,10 @@ export class ImplementationAiService {
   private sanitizeDeploymentSteps(raw: unknown): DeploymentStepPlan[] {
     if (!Array.isArray(raw)) return [];
 
+    // Derived from the live router, not a hand-maintained mirror, so adding a
+    // new write-sensitivity tool to an MCP server doesn't require a second PR.
+    const executable = this.mcpRouter.listWriteToolNames();
+
     const cleaned: DeploymentStepPlan[] = [];
     for (const [i, entry] of raw.entries()) {
       if (!entry || typeof entry !== 'object') continue;
@@ -306,7 +293,7 @@ export class ImplementationAiService {
         );
         continue;
       }
-      if (typeof tool !== 'string' || !EXECUTABLE_TOOL_NAMES.has(tool)) {
+      if (typeof tool !== 'string' || !executable.has(tool)) {
         this.logger.warn(
           `Dropping deploymentStep[${i}]: unknown or non-executable tool ${JSON.stringify(tool)}`,
         );

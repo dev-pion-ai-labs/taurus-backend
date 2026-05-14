@@ -68,6 +68,22 @@ export class McpToolRouter {
     return this.tools.has(name);
   }
 
+  /**
+   * Names of tools eligible to appear in a deploymentStep — i.e. anything
+   * that mutates external state. Read-only tools (list_*, search, query,
+   * taurus context) are filtered out so the planner can't accidentally
+   * schedule a read as a deployment action.
+   */
+  listWriteToolNames(): Set<string> {
+    const names = new Set<string>();
+    for (const tool of this.tools.values()) {
+      if (tool.sensitivity === 'write' || tool.sensitivity === 'destructive') {
+        names.add(tool.name);
+      }
+    }
+    return names;
+  }
+
   async invoke(
     toolName: string,
     rawInput: Record<string, unknown>,

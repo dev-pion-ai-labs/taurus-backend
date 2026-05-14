@@ -143,6 +143,80 @@ describe('Phase 1c provider parity', () => {
     });
   });
 
+  // Regression guard for the bug class fixed in slack.service.ts: a provider
+  // service returning a soft-error envelope instead of throwing causes the
+  // executor to mark the step `completed` with garbage data. Every write
+  // handler must throw on failure so the router converts it to TOOL_FAILED.
+  // Add new providers (Linear, Asana, etc.) to this table.
+  describe.each([
+    {
+      provider: 'jira',
+      tool: 'jira_create_issue',
+      params: { projectKey: 'P', summary: 's' },
+      makeStub: () => ({
+        createIssue: jest.fn().mockRejectedValue(new Error('Jira API error: 401')),
+      }),
+      makeServer: (stub: unknown) => new JiraMcpServer(stub as never),
+    },
+    {
+      provider: 'notion',
+      tool: 'notion_create_page',
+      params: { title: 't' },
+      makeStub: () => ({
+        createPage: jest.fn().mockRejectedValue(new Error('Notion is not connected')),
+      }),
+      makeServer: (stub: unknown) => new NotionMcpServer(stub as never),
+    },
+    {
+      provider: 'gdrive',
+      tool: 'gdrive_create_document',
+      params: { title: 't', content: 'c' },
+      makeStub: () => ({
+        exportDocument: jest
+          .fn()
+          .mockRejectedValue(new Error('Failed to export to Google Drive')),
+      }),
+      makeServer: (stub: unknown) => new GDriveMcpServer(stub as never),
+    },
+    {
+      provider: 'hubspot',
+      tool: 'hubspot_create_contact',
+      params: { email: 'x@y.com' },
+      makeStub: () => ({
+        createContact: jest
+          .fn()
+          .mockRejectedValue(new Error('HubSpot API error: 403')),
+      }),
+      makeServer: (stub: unknown) => new HubSpotMcpServer(stub as never),
+    },
+    {
+      provider: 'salesforce',
+      tool: 'salesforce_create_record',
+      params: { objectType: 'Account', fields: { Name: 'Acme' } },
+      makeStub: () => ({
+        createRecord: jest
+          .fn()
+          .mockRejectedValue(new Error('Salesforce API error: 400')),
+      }),
+      makeServer: (stub: unknown) => new SalesforceMcpServer(stub as never),
+    },
+  ])('$provider service-throws contract', ({ tool, params, makeStub, makeServer }) => {
+    it(`wraps a thrown error from ${tool} into a TOOL_FAILED envelope`, async () => {
+      const stub = makeStub();
+      const router = new McpToolRouter(new McpServerFactory(), [makeServer(stub)]);
+
+      const out = (await router.invoke(tool, params, {
+        orgId: 'org_1',
+        executionMode: 'approved-execution',
+      })) as { error?: boolean; code?: string; message?: string };
+
+      expect(out.error).toBe(true);
+      expect(out.code).toBe('TOOL_FAILED');
+      expect(typeof out.message).toBe('string');
+      expect(out.message!.length).toBeGreaterThan(0);
+    });
+  });
+
   it('maps Notion `columns` input to service `properties`', async () => {
     const notion = {
       createDatabase: jest.fn().mockResolvedValue({ id: 'db1' }),
