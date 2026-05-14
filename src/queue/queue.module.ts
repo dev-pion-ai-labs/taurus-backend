@@ -5,6 +5,7 @@ import { AiModule } from '../ai';
 import { OnboardingModule } from '../onboarding';
 import { IntegrationsModule } from '../integrations';
 import { TrackerModule } from '../tracker/tracker.module';
+import { McpModule } from '../mcp/mcp.module';
 import { AnalysisProcessor } from './analysis.processor';
 import { TrackerStallProcessor } from './tracker-stall.processor';
 import { RenewalCheckProcessor } from './renewal-check.processor';
@@ -17,6 +18,7 @@ import { PlanExecutorService } from '../implementation/plan-executor.service';
     OnboardingModule,
     IntegrationsModule,
     TrackerModule,
+    McpModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {

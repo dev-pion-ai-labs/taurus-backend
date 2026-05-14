@@ -1,55 +1,19 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../prisma';
-import { IntegrationToolExecutor } from './integration-tool-executor';
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../../../prisma';
 
+/**
+ * Single source of truth for the org-context read queries that the AI planner
+ * uses to ground its plans. Both the new TaurusMcpServer and the legacy
+ * ImplementationToolExecutor / IntegrationToolExecutor delegate here so the
+ * two paths can't drift during the migration window.
+ *
+ * All methods are read-only.
+ */
 @Injectable()
-export class ImplementationToolExecutor {
-  private readonly logger = new Logger(ImplementationToolExecutor.name);
+export class TaurusContextService {
+  constructor(private readonly prisma: PrismaService) {}
 
-  constructor(
-    private prisma: PrismaService,
-    private integrationTools: IntegrationToolExecutor,
-  ) {}
-
-  async executeTool(
-    toolName: string,
-    input: Record<string, unknown>,
-    organizationId: string,
-  ): Promise<unknown> {
-    this.logger.debug(`Executing tool: ${toolName} for org ${organizationId}`);
-
-    // Delegate to integration executor if it handles this tool
-    if (this.integrationTools.canHandle(toolName)) {
-      return this.integrationTools.executeTool(toolName, input, organizationId);
-    }
-
-    switch (toolName) {
-      case 'get_organization_context':
-        return this.getOrganizationContext(organizationId);
-      case 'get_department_details':
-        return this.getDepartmentDetails(
-          organizationId,
-          input.departmentName as string | undefined,
-        );
-      case 'get_tech_stack':
-        return this.getTechStack(
-          organizationId,
-          input.category as string | undefined,
-        );
-      case 'get_related_actions':
-        return this.getRelatedActions(
-          organizationId,
-          input.department as string | undefined,
-          input.status as string | undefined,
-        );
-      case 'get_report_context':
-        return this.getReportContext(organizationId);
-      default:
-        return { error: `Unknown tool: ${toolName}` };
-    }
-  }
-
-  private async getOrganizationContext(organizationId: string) {
+  async getOrganizationContext(organizationId: string) {
     const org = await this.prisma.organization.findUnique({
       where: { id: organizationId },
       include: { industry: true },
@@ -72,10 +36,7 @@ export class ImplementationToolExecutor {
     };
   }
 
-  private async getDepartmentDetails(
-    organizationId: string,
-    departmentName?: string,
-  ) {
+  async getDepartmentDetails(organizationId: string, departmentName?: string) {
     const where: Record<string, unknown> = { organizationId };
     if (departmentName) {
       where.name = { contains: departmentName, mode: 'insensitive' };
@@ -103,7 +64,7 @@ export class ImplementationToolExecutor {
     }));
   }
 
-  private async getTechStack(organizationId: string, category?: string) {
+  async getTechStack(organizationId: string, category?: string) {
     const where: Record<string, unknown> = { organizationId };
     if (category) {
       where.category = category;
@@ -122,7 +83,7 @@ export class ImplementationToolExecutor {
     }));
   }
 
-  private async getRelatedActions(
+  async getRelatedActions(
     organizationId: string,
     department?: string,
     status?: string,
@@ -155,7 +116,7 @@ export class ImplementationToolExecutor {
     }));
   }
 
-  private async getReportContext(organizationId: string) {
+  async getReportContext(organizationId: string) {
     const report = await this.prisma.transformationReport.findFirst({
       where: { organizationId, status: 'COMPLETED' },
       orderBy: { generatedAt: 'desc' },
@@ -175,6 +136,69 @@ export class ImplementationToolExecutor {
       departmentScores: report.departmentScores,
       recommendations: report.recommendations,
       implementationPlan: report.implementationPlan,
+    };
+  }
+
+  async getConnectedIntegrations(organizationId: string) {
+    const connections = await this.prisma.integrationConnection.findMany({
+      where: { organizationId, status: 'CONNECTED' },
+      select: { provider: true, externalTeamName: true },
+    });
+
+    const siteUrl = (c: {
+      provider: string;
+      externalTeamName: string | null;
+    }): string | null => {
+      if (!c.externalTeamName) return null;
+      switch (c.provider) {
+        case 'JIRA':
+          return `https://${c.externalTeamName}.atlassian.net`;
+        case 'SLACK':
+          return `https://${c.externalTeamName}.slack.com`;
+        default:
+          return null;
+      }
+    };
+
+    return {
+      connected: connections.map((c) => ({
+        provider: c.provider,
+        teamName: c.externalTeamName,
+        siteUrl: siteUrl(c),
+      })),
+      availableTools: connections.flatMap((c) => {
+        switch (c.provider) {
+          case 'SLACK':
+            return [
+              'slack_create_channel',
+              'slack_send_message',
+              'slack_set_channel_topic',
+              'slack_list_channels',
+              'slack_list_users',
+            ];
+          case 'GOOGLE_DRIVE':
+            return ['gdrive_create_document'];
+          case 'JIRA':
+            return [
+              'jira_create_issue',
+              'jira_transition_issue',
+              'jira_add_comment',
+              'jira_list_projects',
+            ];
+          case 'NOTION':
+            return ['notion_create_page', 'notion_create_database', 'notion_search'];
+          case 'HUBSPOT':
+            return [
+              'hubspot_create_contact',
+              'hubspot_create_deal',
+              'hubspot_list_pipelines',
+            ];
+          case 'SALESFORCE':
+            return ['salesforce_create_record', 'salesforce_query'];
+          default:
+            return [];
+        }
+      }),
     };
   }
 }

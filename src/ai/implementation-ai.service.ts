@@ -2,9 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Anthropic from '@anthropic-ai/sdk';
 import { ArtifactType, IntegrationProvider } from '@prisma/client';
-import { IMPLEMENTATION_TOOLS } from './tools/implementation-tools';
-import { INTEGRATION_TOOLS } from './tools/integration-tools';
-import { ImplementationToolExecutor } from './tools/implementation-tool-executor';
+import { McpToolRouter } from '../mcp/core/mcp-tool-router';
 import {
   IMPLEMENTATION_PLAN_SYSTEM_PROMPT,
   buildPlanPrompt,
@@ -55,7 +53,9 @@ export interface PlanResult {
   deploymentSteps: DeploymentStepPlan[];
 }
 
-// Tool names the PlanExecutor knows how to run (mirrors INTEGRATION_TOOLS minus read-only helpers).
+// Allow-list of write tool names the PlanExecutor may schedule into a deploymentStep.
+// Read-only tools (list_*, search, query) and internal context tools are filtered out
+// so the AI can't accidentally schedule a read as a deployment action.
 const EXECUTABLE_TOOL_NAMES = new Set<string>([
   'slack_create_channel',
   'slack_send_message',
@@ -98,7 +98,7 @@ export class ImplementationAiService {
 
   constructor(
     private configService: ConfigService,
-    private toolExecutor: ImplementationToolExecutor,
+    private mcpRouter: McpToolRouter,
   ) {
     this.client = new Anthropic({
       apiKey: this.configService.get<string>('ai.anthropicApiKey')!,
@@ -179,7 +179,7 @@ export class ImplementationAiService {
         model: this.model,
         max_tokens: 8192,
         system: IMPLEMENTATION_PLAN_SYSTEM_PROMPT,
-        tools: [...IMPLEMENTATION_TOOLS, ...INTEGRATION_TOOLS],
+        tools: this.mcpRouter.listToolsForClaude(),
         messages,
       });
 
@@ -204,10 +204,15 @@ export class ImplementationAiService {
         for (const block of response.content) {
           if (block.type === 'tool_use') {
             this.logger.debug(`Tool call: ${block.name}`);
-            const result = await this.toolExecutor.executeTool(
+            // Planning loop runs in approved-execution mode for behavioural
+            // parity with the legacy executor. To activate the sensitivity-
+            // based dry-run gate (writes return preview envelopes during
+            // planning), switch this to 'planning' and update the planner
+            // prompt to teach Claude how to interpret the dry-run envelope.
+            const result = await this.mcpRouter.invoke(
               block.name,
               block.input as Record<string, unknown>,
-              organizationId,
+              { orgId: organizationId, executionMode: 'approved-execution' },
             );
             toolResults.push({
               type: 'tool_result',

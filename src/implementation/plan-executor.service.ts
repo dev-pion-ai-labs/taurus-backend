@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma';
-import { IntegrationToolExecutor } from '../ai/tools/integration-tool-executor';
+import { McpToolRouter } from '../mcp/core/mcp-tool-router';
 import { SlackService } from '../integrations/services/slack.service';
 import { TrackerService } from '../tracker/tracker.service';
 import type { DeploymentStepPlan } from '../ai/implementation-ai.service';
@@ -19,14 +19,15 @@ export class PlanExecutorService {
 
   constructor(
     private prisma: PrismaService,
-    private toolExecutor: IntegrationToolExecutor,
+    private mcpRouter: McpToolRouter,
     private slack: SlackService,
     private tracker: TrackerService,
   ) {}
 
   /**
-   * Execute the deploymentSteps on a plan. Each step is dispatched to
-   * IntegrationToolExecutor; results are persisted back onto the plan's
+   * Execute the deploymentSteps on a plan. Each step is dispatched through
+   * the McpToolRouter in approved-execution mode; results are persisted back
+   * onto the plan's
    * deploymentSteps JSON field. On completion the parent tracker action is
    * marked DEPLOYED regardless of partial failures — callers can inspect
    * the per-step status to surface errors in the UI.
@@ -145,10 +146,10 @@ export class PlanExecutorService {
       await this.persistSteps(planId, executed);
 
       try {
-        const raw = await this.toolExecutor.executeTool(
+        const raw = await this.mcpRouter.invoke(
           step.tool,
           substitution.params,
-          organizationId,
+          { orgId: organizationId, executionMode: 'approved-execution' },
         );
 
         if (this.isErrorResult(raw)) {
@@ -173,8 +174,9 @@ export class PlanExecutorService {
           summary.completed += 1;
         }
       } catch (err) {
-        // IntegrationToolExecutor catches provider errors internally, so reaching
-        // this branch indicates an unexpected system error (DB, Prisma, etc.)
+        // The MCP router catches provider errors internally and returns them as
+        // { error } envelopes, so reaching this branch indicates an unexpected
+        // system error (DB, Prisma, programming bug, etc.)
         const message = (err as Error).message;
         executed[i] = {
           ...executed[i],

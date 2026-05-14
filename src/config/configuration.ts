@@ -34,6 +34,17 @@ export default () => ({
   storage: {
     uploadDir: process.env.UPLOAD_DIR || './uploads',
   },
+  mcp: {
+    // Comma-separated list of provider namespaces to route via the MCP layer.
+    // After Phase 1e cutover, the MCP router is the only execution path —
+    // defaulting to "*" means all built-in providers (slack, jira, notion,
+    // gdrive, hubspot, salesforce, taurus) are registered automatically.
+    // To restrict for testing, set e.g. MCP_PROVIDERS=slack,taurus.
+    providers: (process.env.MCP_PROVIDERS || '*')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  },
   integrations: {
     slack: {
       clientId: process.env.SLACK_CLIENT_ID || '',
