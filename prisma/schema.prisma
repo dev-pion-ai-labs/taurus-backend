@@ -131,6 +131,8 @@ enum ArtifactType {
 enum IntegrationProvider {
   SLACK
   GOOGLE_DRIVE
+  GOOGLE_CALENDAR
+  GMAIL
   MICROSOFT_TEAMS
   JIRA
   SALESFORCE

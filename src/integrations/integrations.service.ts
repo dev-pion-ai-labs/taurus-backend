@@ -34,7 +34,9 @@ function translateOAuthError(
     return 'This Notion integration is set to "Internal" — switch it to "Public" in your Notion integration settings so other workspaces can install it.';
   }
   if (
-    provider === 'GOOGLE_DRIVE' &&
+    (provider === 'GOOGLE_DRIVE' ||
+      provider === 'GOOGLE_CALENDAR' ||
+      provider === 'GMAIL') &&
     (text.includes('access_denied') || text.includes('admin_policy_enforced'))
   ) {
     return 'Google blocked this connection — either the OAuth consent screen is still in "Testing" mode or your domain admin disallows third-party apps.';
@@ -115,7 +117,11 @@ export class IntegrationsService {
     // Provider-specific params
     if (provider === 'SLACK') {
       params.set('scope', providerConfig.scopes.join(','));
-    } else if (provider === 'GOOGLE_DRIVE') {
+    } else if (
+      provider === 'GOOGLE_DRIVE' ||
+      provider === 'GOOGLE_CALENDAR' ||
+      provider === 'GMAIL'
+    ) {
       params.set('scope', providerConfig.scopes.join(' '));
       params.set('access_type', 'offline');
       params.set('prompt', 'consent');
@@ -373,7 +379,9 @@ export class IntegrationsService {
         };
       }
 
-      case 'GOOGLE_DRIVE': {
+      case 'GOOGLE_DRIVE':
+      case 'GOOGLE_CALENDAR':
+      case 'GMAIL': {
         const expiresIn = data.expires_in as number | undefined;
         return {
           accessToken: data.access_token as string,

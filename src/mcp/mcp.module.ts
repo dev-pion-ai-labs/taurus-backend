@@ -8,6 +8,8 @@ import { SlackMcpServer } from './servers/slack/slack-mcp.server';
 import { JiraMcpServer } from './servers/jira/jira-mcp.server';
 import { NotionMcpServer } from './servers/notion/notion-mcp.server';
 import { GDriveMcpServer } from './servers/gdrive/gdrive-mcp.server';
+import { GCalMcpServer } from './servers/gcal/gcal-mcp.server';
+import { GmailMcpServer } from './servers/gmail/gmail-mcp.server';
 import { HubSpotMcpServer } from './servers/hubspot/hubspot-mcp.server';
 import { SalesforceMcpServer } from './servers/salesforce/salesforce-mcp.server';
 import { TaurusMcpServer } from './servers/taurus/taurus-mcp.server';
@@ -31,6 +33,8 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
   { namespace: 'jira', token: JiraMcpServer },
   { namespace: 'notion', token: NotionMcpServer },
   { namespace: 'gdrive', token: GDriveMcpServer },
+  { namespace: 'gcal', token: GCalMcpServer },
+  { namespace: 'gmail', token: GmailMcpServer },
   { namespace: 'hubspot', token: HubSpotMcpServer },
   { namespace: 'salesforce', token: SalesforceMcpServer },
   { namespace: 'taurus', token: TaurusMcpServer },
@@ -45,6 +49,8 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
     JiraMcpServer,
     NotionMcpServer,
     GDriveMcpServer,
+    GCalMcpServer,
+    GmailMcpServer,
     HubSpotMcpServer,
     SalesforceMcpServer,
     TaurusMcpServer,
@@ -56,6 +62,8 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
         JiraMcpServer,
         NotionMcpServer,
         GDriveMcpServer,
+        GCalMcpServer,
+        GmailMcpServer,
         HubSpotMcpServer,
         SalesforceMcpServer,
         TaurusMcpServer,
@@ -66,6 +74,8 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
         jira: JiraMcpServer,
         notion: NotionMcpServer,
         gdrive: GDriveMcpServer,
+        gcal: GCalMcpServer,
+        gmail: GmailMcpServer,
         hubspot: HubSpotMcpServer,
         salesforce: SalesforceMcpServer,
         taurus: TaurusMcpServer,
@@ -78,6 +88,8 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
           jira,
           notion,
           gdrive,
+          gcal,
+          gmail,
           hubspot,
           salesforce,
           taurus,

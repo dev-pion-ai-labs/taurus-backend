@@ -3,6 +3,8 @@ import { IntegrationsController } from './integrations.controller';
 import { IntegrationsService } from './integrations.service';
 import { SlackService } from './services/slack.service';
 import { GoogleDriveService } from './services/google-drive.service';
+import { GoogleCalendarService } from './services/google-calendar.service';
+import { GmailService } from './services/gmail.service';
 import { JiraService } from './services/jira.service';
 import { NotionService } from './services/notion.service';
 import { HubSpotService } from './services/hubspot.service';
@@ -16,6 +18,8 @@ import { TokenManager } from './services/token-manager';
     TokenManager,
     SlackService,
     GoogleDriveService,
+    GoogleCalendarService,
+    GmailService,
     JiraService,
     NotionService,
     HubSpotService,
@@ -25,6 +29,8 @@ import { TokenManager } from './services/token-manager';
     IntegrationsService,
     SlackService,
     GoogleDriveService,
+    GoogleCalendarService,
+    GmailService,
     JiraService,
     NotionService,
     HubSpotService,
