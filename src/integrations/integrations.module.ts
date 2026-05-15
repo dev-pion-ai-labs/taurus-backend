@@ -5,6 +5,9 @@ import { SlackService } from './services/slack.service';
 import { GoogleDriveService } from './services/google-drive.service';
 import { GoogleCalendarService } from './services/google-calendar.service';
 import { GmailService } from './services/gmail.service';
+import { AsanaService } from './services/asana.service';
+import { ConfluenceService } from './services/confluence.service';
+import { LinearService } from './services/linear.service';
 import { JiraService } from './services/jira.service';
 import { NotionService } from './services/notion.service';
 import { HubSpotService } from './services/hubspot.service';
@@ -20,6 +23,9 @@ import { TokenManager } from './services/token-manager';
     GoogleDriveService,
     GoogleCalendarService,
     GmailService,
+    AsanaService,
+    ConfluenceService,
+    LinearService,
     JiraService,
     NotionService,
     HubSpotService,
@@ -31,6 +37,9 @@ import { TokenManager } from './services/token-manager';
     GoogleDriveService,
     GoogleCalendarService,
     GmailService,
+    AsanaService,
+    ConfluenceService,
+    LinearService,
     JiraService,
     NotionService,
     HubSpotService,

@@ -125,10 +125,13 @@ export class IntegrationsService {
       params.set('scope', providerConfig.scopes.join(' '));
       params.set('access_type', 'offline');
       params.set('prompt', 'consent');
-    } else if (provider === 'JIRA') {
+    } else if (provider === 'JIRA' || provider === 'CONFLUENCE') {
       params.set('scope', providerConfig.scopes.join(' '));
       params.set('audience', 'api.atlassian.com');
       params.set('prompt', 'consent');
+    } else if (provider === 'LINEAR') {
+      params.set('scope', providerConfig.scopes.join(','));
+      params.set('actor', 'application');
     } else {
       params.set('scope', providerConfig.scopes.join(' '));
     }

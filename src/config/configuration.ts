@@ -54,9 +54,29 @@ export default () => ({
       clientId: process.env.GOOGLE_CLIENT_ID || '',
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     },
+    google_calendar: {
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    },
+    gmail: {
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    },
     jira: {
       clientId: process.env.JIRA_CLIENT_ID || '',
       clientSecret: process.env.JIRA_CLIENT_SECRET || '',
+    },
+    confluence: {
+      clientId: process.env.JIRA_CLIENT_ID || '',
+      clientSecret: process.env.JIRA_CLIENT_SECRET || '',
+    },
+    linear: {
+      clientId: process.env.LINEAR_CLIENT_ID || '',
+      clientSecret: process.env.LINEAR_CLIENT_SECRET || '',
+    },
+    asana: {
+      clientId: process.env.ASANA_CLIENT_ID || '',
+      clientSecret: process.env.ASANA_CLIENT_SECRET || '',
     },
     notion: {
       clientId: process.env.NOTION_CLIENT_ID || '',

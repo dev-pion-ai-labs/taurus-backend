@@ -55,6 +55,32 @@ export const OAUTH_PROVIDERS: Partial<Record<IntegrationProvider, OAuthProviderC
     clientIdEnv: 'GOOGLE_CLIENT_ID',
     clientSecretEnv: 'GOOGLE_CLIENT_SECRET',
   },
+  ASANA: {
+    authorizeUrl: 'https://app.asana.com/-/oauth_authorize',
+    tokenUrl: 'https://app.asana.com/-/oauth_token',
+    scopes: ['default'],
+    clientIdEnv: 'ASANA_CLIENT_ID',
+    clientSecretEnv: 'ASANA_CLIENT_SECRET',
+  },
+  LINEAR: {
+    authorizeUrl: 'https://linear.app/oauth/authorize',
+    tokenUrl: 'https://api.linear.app/oauth/token',
+    scopes: ['read', 'write'],
+    clientIdEnv: 'LINEAR_CLIENT_ID',
+    clientSecretEnv: 'LINEAR_CLIENT_SECRET',
+  },
+  CONFLUENCE: {
+    authorizeUrl: 'https://auth.atlassian.com/authorize',
+    tokenUrl: 'https://auth.atlassian.com/oauth/token',
+    scopes: [
+      'read:confluence-content.all',
+      'write:confluence-content',
+      'read:confluence-space.summary',
+      'offline_access',
+    ],
+    clientIdEnv: 'JIRA_CLIENT_ID',
+    clientSecretEnv: 'JIRA_CLIENT_SECRET',
+  },
   JIRA: {
     authorizeUrl: 'https://auth.atlassian.com/authorize',
     tokenUrl: 'https://auth.atlassian.com/oauth/token',

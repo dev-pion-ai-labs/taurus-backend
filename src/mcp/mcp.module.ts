@@ -10,6 +10,9 @@ import { NotionMcpServer } from './servers/notion/notion-mcp.server';
 import { GDriveMcpServer } from './servers/gdrive/gdrive-mcp.server';
 import { GCalMcpServer } from './servers/gcal/gcal-mcp.server';
 import { GmailMcpServer } from './servers/gmail/gmail-mcp.server';
+import { AsanaMcpServer } from './servers/asana/asana-mcp.server';
+import { ConfluenceMcpServer } from './servers/confluence/confluence-mcp.server';
+import { LinearMcpServer } from './servers/linear/linear-mcp.server';
 import { HubSpotMcpServer } from './servers/hubspot/hubspot-mcp.server';
 import { SalesforceMcpServer } from './servers/salesforce/salesforce-mcp.server';
 import { TaurusMcpServer } from './servers/taurus/taurus-mcp.server';
@@ -35,6 +38,9 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
   { namespace: 'gdrive', token: GDriveMcpServer },
   { namespace: 'gcal', token: GCalMcpServer },
   { namespace: 'gmail', token: GmailMcpServer },
+  { namespace: 'asana', token: AsanaMcpServer },
+  { namespace: 'confluence', token: ConfluenceMcpServer },
+  { namespace: 'linear', token: LinearMcpServer },
   { namespace: 'hubspot', token: HubSpotMcpServer },
   { namespace: 'salesforce', token: SalesforceMcpServer },
   { namespace: 'taurus', token: TaurusMcpServer },
@@ -51,6 +57,9 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
     GDriveMcpServer,
     GCalMcpServer,
     GmailMcpServer,
+    AsanaMcpServer,
+    ConfluenceMcpServer,
+    LinearMcpServer,
     HubSpotMcpServer,
     SalesforceMcpServer,
     TaurusMcpServer,
@@ -64,6 +73,9 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
         GDriveMcpServer,
         GCalMcpServer,
         GmailMcpServer,
+        AsanaMcpServer,
+        ConfluenceMcpServer,
+        LinearMcpServer,
         HubSpotMcpServer,
         SalesforceMcpServer,
         TaurusMcpServer,
@@ -76,6 +88,9 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
         gdrive: GDriveMcpServer,
         gcal: GCalMcpServer,
         gmail: GmailMcpServer,
+        asana: AsanaMcpServer,
+        confluence: ConfluenceMcpServer,
+        linear: LinearMcpServer,
         hubspot: HubSpotMcpServer,
         salesforce: SalesforceMcpServer,
         taurus: TaurusMcpServer,
@@ -90,6 +105,9 @@ const PROVIDER_REGISTRATIONS: ReadonlyArray<{
           gdrive,
           gcal,
           gmail,
+          asana,
+          confluence,
+          linear,
           hubspot,
           salesforce,
           taurus,
