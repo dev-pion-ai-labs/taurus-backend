@@ -7,6 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import type ms from 'ms';
 import { PrismaService } from '../prisma';
 import { UsersService } from '../users';
 import { NotificationsService } from '../notifications';
@@ -26,8 +27,8 @@ export class AuthService {
   async sendOtp(email: string) {
     const user = await this.usersService.findOrCreateByEmail(email);
 
-    // Generate 6-digit OTP
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate 6-digit OTP using a CSPRNG so codes aren't predictable.
+    const code = crypto.randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     await this.prisma.otpCode.create({
@@ -117,7 +118,7 @@ export class AuthService {
 
     const accessToken = this.jwtService.sign(payload, {
       secret: this.configService.get<string>('jwt.accessSecret')!,
-      expiresIn: this.configService.get<string>('jwt.accessExpiration')! as any,
+      expiresIn: this.configService.get<string>('jwt.accessExpiration')! as ms.StringValue,
     });
 
     const refreshToken = crypto.randomUUID();

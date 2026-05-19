@@ -30,7 +30,16 @@ export const envValidationSchema = Joi.object({
 
   UPLOAD_DIR: Joi.string().default('./uploads'),
 
-  CREDENTIAL_ENCRYPTION_KEY: Joi.string().min(32).optional(),
+  // Required in production: integration OAuth tokens are stored encrypted with
+  // this key. Without it the integrations crypto helper silently falls back to
+  // plaintext storage, which is unacceptable for a live deployment.
+  CREDENTIAL_ENCRYPTION_KEY: Joi.string()
+    .min(32)
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
 
   SLACK_CLIENT_ID: Joi.string().optional(),
   SLACK_CLIENT_SECRET: Joi.string().optional(),
