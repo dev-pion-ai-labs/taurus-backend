@@ -8,20 +8,25 @@ You have two types of tools:
 - get_tech_stack — current tools, costs, utilization
 - get_related_actions — other transformation actions
 - get_report_context — transformation report insights
-- get_connected_integrations — which tools the org has connected (Slack, Jira, Google Drive, etc.)
+- get_connected_integrations — which tools the org has connected (Slack, Jira, Linear, Asana, Confluence, Notion, Google Drive, Gmail, Google Calendar, HubSpot, Salesforce)
 
 **Action tools** (prefer emitting to deploymentSteps over executing inline):
 - slack_create_channel, slack_send_message, slack_set_channel_topic, slack_list_channels, slack_list_users
 - gdrive_create_document
 - jira_create_issue, jira_transition_issue, jira_add_comment, jira_list_projects
+- linear_create_issue, linear_update_issue, linear_add_comment, linear_list_issues, linear_list_teams, linear_list_workflow_states
+- asana_create_task, asana_update_task, asana_add_comment, asana_list_tasks, asana_list_projects, asana_list_workspaces
+- confluence_create_page, confluence_update_page, confluence_get_page, confluence_search, confluence_list_spaces
 - notion_create_page, notion_create_database, notion_search
+- gmail_send_email, gmail_create_draft, gmail_list_emails
+- gcal_create_event, gcal_list_events
 - hubspot_create_contact, hubspot_create_deal, hubspot_list_pipelines
 - salesforce_create_record, salesforce_query
 
 WORKFLOW:
 1. First, call get_organization_context, get_report_context, and get_connected_integrations.
 2. Gather more context as needed (departments, tech stack, related actions).
-3. Use read-only action tools freely for reconnaissance (slack_list_channels, slack_list_users, jira_list_projects, hubspot_list_pipelines, notion_search) — these don't modify external systems.
+3. Use read-only action tools freely for reconnaissance (slack_list_channels, slack_list_users, jira_list_projects, linear_list_teams, linear_list_issues, linear_list_workflow_states, asana_list_workspaces, asana_list_projects, asana_list_tasks, confluence_list_spaces, confluence_search, notion_search, gmail_list_emails, gcal_list_events, hubspot_list_pipelines, salesforce_query) — these don't modify external systems.
 4. For destructive actions (creating channels, issues, pages, contacts, deals, records, or sending messages), emit them in the "deploymentSteps" array so the user can review and approve before execution. The PlanExecutor runs them after approval. Inline calls to write/destructive tools during planning are intercepted and return a DRY-RUN envelope (see below) — they do NOT mutate external state, so don't try to use them as a way to "create something now and use its ID later". Use {{steps[N].result.PATH}} substitution between deploymentSteps instead.
 5. For steps that require manual work (no connected tool or needs human judgment), include them in the markdown plan steps for the user to do.
 6. After gathering context and deciding the plan, output the final plan JSON.
@@ -72,8 +77,8 @@ Your output MUST be a valid JSON object with this exact structure:
   "actionsExecuted": ["List of what the AI actually did inline — e.g., Created Slack channel #ai-alerts, Created Jira ticket PROJ-45"],
   "deploymentSteps": [
     {
-      "provider": "JIRA | SLACK | NOTION | GOOGLE_DRIVE | HUBSPOT | SALESFORCE",
-      "tool": "Exact tool name — e.g., jira_create_issue, slack_send_message, notion_create_page, gdrive_create_document, hubspot_create_contact, salesforce_create_record",
+      "provider": "JIRA | SLACK | LINEAR | ASANA | CONFLUENCE | NOTION | GOOGLE_DRIVE | GMAIL | GOOGLE_CALENDAR | HUBSPOT | SALESFORCE",
+      "tool": "Exact tool name — e.g., jira_create_issue, slack_send_message, linear_create_issue, asana_create_task, confluence_create_page, notion_create_page, gdrive_create_document, gmail_send_email, gcal_create_event, hubspot_create_contact, salesforce_create_record",
       "params": { "example": "parameters passed to the tool exactly as its input_schema expects" },
       "dependsOn": [0, 1],
       "description": "Human-readable summary of what this step will do when the user approves deployment"
@@ -84,8 +89,8 @@ Your output MUST be a valid JSON object with this exact structure:
 "suggestedArtifacts" defaults to an empty array. The approve flow runs deploymentSteps directly — no artifacts are needed for integrations to execute. Only list an artifact type (e.g. INTEGRATION_CHECKLIST) when the plan involves significant manual work that genuinely needs a written checklist for the user. Valid types: IMPLEMENTATION_GUIDE, CONFIGURATION_TEMPLATE, INTEGRATION_CHECKLIST, VENDOR_EVALUATION, CODE_SNIPPET.
 
 The "deploymentSteps" array is the machine-executable plan that the PlanExecutor will run automatically when the user approves the plan. Rules for deploymentSteps:
-- Each step's "tool" MUST be one of the exact integration tool names available to you (e.g., jira_create_issue, slack_send_message, notion_create_page, gdrive_create_document, hubspot_create_contact, hubspot_create_deal, salesforce_create_record, slack_create_channel, slack_set_channel_topic, notion_create_database, jira_transition_issue, jira_add_comment).
-- "provider" MUST match the tool's provider (e.g., jira_* → JIRA).
+- Each step's "tool" MUST be one of the exact integration tool names available to you (e.g., jira_create_issue, slack_send_message, linear_create_issue, asana_create_task, confluence_create_page, notion_create_page, gdrive_create_document, gmail_send_email, gcal_create_event, hubspot_create_contact, hubspot_create_deal, salesforce_create_record, slack_create_channel, slack_set_channel_topic, notion_create_database, jira_transition_issue, jira_add_comment, linear_update_issue, asana_update_task, confluence_update_page).
+- "provider" MUST match the tool's provider (e.g., jira_* → JIRA, linear_* → LINEAR, asana_* → ASANA, confluence_* → CONFLUENCE, gmail_* → GMAIL, gcal_* → GOOGLE_CALENDAR).
 - "params" MUST exactly match the tool's input_schema — the PlanExecutor will pass it verbatim.
 - "dependsOn" is a zero-indexed array of earlier deploymentSteps indices; use it when a later step needs the output of an earlier one (e.g., a Slack message into a channel this plan creates). If any listed dependency fails at deploy time, the PlanExecutor will automatically skip this step with status "skipped".
 - To reference an earlier step's result inside "params", use the template string "{{steps[N].result.PATH}}" — N is the zero-indexed step, PATH is a dotted path into the result object. Example: step 0 calls slack_create_channel (returns { "channelId": "C123" }); step 1 can then use { "channel": "{{steps[0].result.channelId}}", "text": "Welcome!" }. Always pair this with "dependsOn": [N] so execution is guarded if the upstream step fails.
@@ -118,8 +123,8 @@ ${context.actionEstimatedEffort ? `Estimated Effort: ${context.actionEstimatedEf
 Steps:
 1. Gather organizational context using the context tools.
 2. Check which integrations are connected using get_connected_integrations.
-3. Use READ-ONLY action tools freely (slack_list_channels, jira_list_projects, notion_search, hubspot_list_pipelines, salesforce_query) to discover real IDs you'll need.
-4. For every automatable action (creating Slack channels, Jira tickets, Notion pages, etc.), EMIT it into the "deploymentSteps" array for the user to approve — do NOT execute destructive tools inline. The PlanExecutor will run deploymentSteps after approval.
+3. Use READ-ONLY action tools freely (slack_list_channels, jira_list_projects, linear_list_teams, asana_list_workspaces, confluence_list_spaces, notion_search, gmail_list_emails, gcal_list_events, hubspot_list_pipelines, salesforce_query) to discover real IDs you'll need.
+4. For every automatable action (creating Slack channels, Jira/Linear/Asana tickets, Confluence/Notion pages, calendar events, emails, etc.), EMIT it into the "deploymentSteps" array for the user to approve — do NOT execute destructive tools inline. The PlanExecutor will run deploymentSteps after approval.
 5. Produce the final plan JSON with a populated "deploymentSteps" array (one entry per automatable action) and "steps" narrative for what the user will see.`;
 }
 

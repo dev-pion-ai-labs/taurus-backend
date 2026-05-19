@@ -153,8 +153,14 @@ export class TaurusContextService {
       switch (c.provider) {
         case 'JIRA':
           return `https://${c.externalTeamName}.atlassian.net`;
+        case 'CONFLUENCE':
+          return `https://${c.externalTeamName}.atlassian.net/wiki`;
         case 'SLACK':
           return `https://${c.externalTeamName}.slack.com`;
+        case 'LINEAR':
+          return `https://linear.app/${c.externalTeamName}`;
+        case 'ASANA':
+          return `https://app.asana.com/0/${c.externalTeamName}`;
         default:
           return null;
       }
@@ -185,8 +191,38 @@ export class TaurusContextService {
               'jira_add_comment',
               'jira_list_projects',
             ];
+          case 'LINEAR':
+            return [
+              'linear_create_issue',
+              'linear_update_issue',
+              'linear_add_comment',
+              'linear_list_issues',
+              'linear_list_teams',
+              'linear_list_workflow_states',
+            ];
+          case 'ASANA':
+            return [
+              'asana_create_task',
+              'asana_update_task',
+              'asana_add_comment',
+              'asana_list_tasks',
+              'asana_list_projects',
+              'asana_list_workspaces',
+            ];
+          case 'CONFLUENCE':
+            return [
+              'confluence_create_page',
+              'confluence_update_page',
+              'confluence_get_page',
+              'confluence_search',
+              'confluence_list_spaces',
+            ];
           case 'NOTION':
             return ['notion_create_page', 'notion_create_database', 'notion_search'];
+          case 'GMAIL':
+            return ['gmail_send_email', 'gmail_create_draft', 'gmail_list_emails'];
+          case 'GOOGLE_CALENDAR':
+            return ['gcal_create_event', 'gcal_list_events'];
           case 'HUBSPOT':
             return [
               'hubspot_create_contact',

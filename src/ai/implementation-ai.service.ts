@@ -56,8 +56,13 @@ export interface PlanResult {
 const VALID_PROVIDERS = new Set<IntegrationProvider>([
   'SLACK',
   'GOOGLE_DRIVE',
+  'GOOGLE_CALENDAR',
+  'GMAIL',
   'MICROSOFT_TEAMS',
   'JIRA',
+  'CONFLUENCE',
+  'LINEAR',
+  'ASANA',
   'SALESFORCE',
   'HUBSPOT',
   'ZAPIER',
